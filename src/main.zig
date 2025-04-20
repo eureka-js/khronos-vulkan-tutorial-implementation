@@ -35,14 +35,16 @@ fn DestroyDebugUtilsMessengerEXT(instance: c.VkInstance, debugMessenger: c.VkDeb
 
 const QueueFamilyIndices = struct {
     graphicsFamily: ?u32,
+    presentFamily: ?u32,
 
     fn isComplete(self: QueueFamilyIndices) bool {
-        return self.graphicsFamily != null;
+        return self.graphicsFamily != null and self.presentFamily != null;
     }
 };
 
 const HelloTriangleApplication = struct {
     window: ?*c.GLFWwindow = undefined,
+    surface: c.VkSurfaceKHR = undefined,
 
     instance: c.VkInstance = undefined,
     debugMessenger: c.VkDebugUtilsMessengerEXT = undefined,
@@ -51,6 +53,7 @@ const HelloTriangleApplication = struct {
     device: c.VkDevice = undefined,
 
     graphicsQueue: c.VkQueue = undefined,
+    presentQueue: c.VkQueue = undefined,
 
     allocator: *const std.mem.Allocator,
 
@@ -75,6 +78,7 @@ const HelloTriangleApplication = struct {
     fn initVulkan(self: *HelloTriangleApplication) !void {
         try self.createInstance();
         try self.setupDebugMessenger();
+        try self.createSurface();
         try self.pickPhysicalDevice();
         try self.createLogicalDevice();
     }
@@ -86,12 +90,13 @@ const HelloTriangleApplication = struct {
     }
 
     fn cleanup(self: *HelloTriangleApplication) !void {
+        c.vkDestroyDevice(self.device, null);
+
         if (enableValidationLayers) {
             DestroyDebugUtilsMessengerEXT(self.instance, self.debugMessenger, null);
         }
 
-        c.vkDestroyDevice(self.device, null);
-
+        c.vkDestroySurfaceKHR(self.instance, self.surface, null);
         c.vkDestroyInstance(self.instance, null);
 
         c.glfwDestroyWindow(self.window);
@@ -161,6 +166,12 @@ const HelloTriangleApplication = struct {
         }
     }
 
+    fn createSurface(self: *HelloTriangleApplication) !void {
+        if (c.glfwCreateWindowSurface(self.instance, self.window, null, &self.surface) != c.VK_SUCCESS) {
+            return error.FailedToCreateAWindowSurface;
+        }
+    }
+
     fn pickPhysicalDevice(self: *HelloTriangleApplication) !void {
         var deviceCount: u32 = 0;
         _ = c.vkEnumeratePhysicalDevices(self.instance, &deviceCount, null);
@@ -172,7 +183,7 @@ const HelloTriangleApplication = struct {
         defer self.allocator.free(devices);
         _ = c.vkEnumeratePhysicalDevices(self.instance, &deviceCount, devices.ptr);
         for (devices) |device| {
-            if (try isDeviceSuitable(device, self.allocator)) {
+            if (try isDeviceSuitable(device, self.surface, self.allocator)) {
                 self.physicalDevice = device;
                 break;
             }
@@ -185,22 +196,33 @@ const HelloTriangleApplication = struct {
     }
 
     fn createLogicalDevice(self: *HelloTriangleApplication) !void {
-        const indices: QueueFamilyIndices = try findQueueFamilies(self.physicalDevice, self.allocator);
+        const indices: QueueFamilyIndices = try findQueueFamilies(self.physicalDevice, self.surface, self.allocator);
 
-        var queueCreateInfo: c.VkDeviceQueueCreateInfo = .{
-            .sType = c.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-            .queueFamilyIndex = indices.graphicsFamily.?,
-            .queueCount = 1,
-        };
-        var queuePriority: f32 = 1.0;
-        queueCreateInfo.pQueuePriorities = &queuePriority;
+        var queueCreateInfos = std.ArrayList(c.VkDeviceQueueCreateInfo).init(self.allocator.*);
+        defer queueCreateInfos.deinit();
+        var uniqueQueueFamilies = std.AutoHashMap(u32, void).init(self.allocator.*);
+        defer uniqueQueueFamilies.deinit();
+        try uniqueQueueFamilies.put(indices.graphicsFamily.?, {});
+        try uniqueQueueFamilies.put(indices.presentFamily.?, {});
+
+        const queuePriority: f32 = 1.0;
+        var it = uniqueQueueFamilies.iterator();
+        while (it.next()) |entry| {
+            const queueCreateInfo: c.VkDeviceQueueCreateInfo = .{
+                .sType = c.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+                .queueFamilyIndex = entry.key_ptr.*,
+                .queueCount = 1,
+                .pQueuePriorities = &queuePriority,
+            };
+            try queueCreateInfos.append(queueCreateInfo);
+        }
 
         var deviceFeatures: c.VkPhysicalDeviceFeatures = .{};
 
-        var createInfo: c.VkDeviceCreateInfo = .{
+        const createInfo: c.VkDeviceCreateInfo = .{
             .sType = c.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-            .pQueueCreateInfos = &queueCreateInfo,
-            .queueCreateInfoCount = 1,
+            .queueCreateInfoCount = @intCast(queueCreateInfos.items.len),
+            .pQueueCreateInfos = queueCreateInfos.items.ptr,
             .pEnabledFeatures = &deviceFeatures,
             .enabledExtensionCount = 0,
         };
@@ -210,16 +232,17 @@ const HelloTriangleApplication = struct {
         }
 
         c.vkGetDeviceQueue(self.device, indices.graphicsFamily.?, 0, &self.graphicsQueue);
+        c.vkGetDeviceQueue(self.device, indices.presentFamily.?, 0, &self.presentQueue);
     }
 
-    fn isDeviceSuitable(device: c.VkPhysicalDevice, allocator: *const std.mem.Allocator) !bool {
-        const indices: QueueFamilyIndices = try findQueueFamilies(device, allocator);
+    fn isDeviceSuitable(device: c.VkPhysicalDevice, surface: c.VkSurfaceKHR, allocator: *const std.mem.Allocator) !bool {
+        const indices: QueueFamilyIndices = try findQueueFamilies(device, surface, allocator);
 
         return indices.isComplete();
     }
 
-    fn findQueueFamilies(device: c.VkPhysicalDevice, allocator: *const std.mem.Allocator) !QueueFamilyIndices {
-        var indices: QueueFamilyIndices = .{ .graphicsFamily = null };
+    fn findQueueFamilies(device: c.VkPhysicalDevice, surface: c.VkSurfaceKHR, allocator: *const std.mem.Allocator) !QueueFamilyIndices {
+        var indices: QueueFamilyIndices = .{ .graphicsFamily = null, .presentFamily = null };
 
         var queueFamilyCount: u32 = 0;
         c.vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, null);
@@ -227,8 +250,19 @@ const HelloTriangleApplication = struct {
         defer allocator.free(queueFamilies);
         c.vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.ptr);
         for (queueFamilies, 0..) |queueFamily, i| {
+            // NOTE: The same queue family used for both drawing and presentation
+            // would yield improved performance compared to this loop implementation
+            // (even though it can happen in this implementation that the same queue family
+            // gets selected for both). (2025-04-19)
+
             if ((queueFamily.queueFlags & c.VK_QUEUE_GRAPHICS_BIT) != 0) {
                 indices.graphicsFamily = @intCast(i);
+            }
+
+            var doesSupportPresent: c.VkBool32 = 0;
+            _ = c.vkGetPhysicalDeviceSurfaceSupportKHR(device, @intCast(i), surface, &doesSupportPresent);
+            if (doesSupportPresent != 0) {
+                indices.presentFamily = @intCast(i);
             }
 
             if (indices.isComplete()) {
@@ -243,7 +277,10 @@ const HelloTriangleApplication = struct {
         var glfwExtensionCount: u32 = 0;
         const glfwExtensions: [*c][*c]const u8 = c.glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
 
-        var extensions = std.ArrayList(@TypeOf(glfwExtensions.*)).init(allocator.*);
+        var extensions = std.ArrayList([*c]const u8).init(allocator.*);
+        for (0..glfwExtensionCount) |i| {
+            try extensions.append(glfwExtensions[i]);
+        }
         if (enableValidationLayers) {
             try extensions.append(c.VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         }
