@@ -12,6 +12,8 @@ const HEIGHT: u32 = 600;
 const validationLayers: []const [*c]const u8 = &[_][*c]const u8{"VK_LAYER_KHRONOS_validation"};
 const enableValidationLayers = builtin.mode == .Debug;
 
+const deviceExtensions: []const [*c]const u8 = &[_][*c]const u8{c.VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+
 fn CreateDebugUtilMessengerEXT(
     instance: c.VkInstance,
     pCreateInfo: *c.VkDebugUtilsMessengerCreateInfoEXT,
@@ -42,9 +44,38 @@ const QueueFamilyIndices = struct {
     }
 };
 
+const SwapChainSupportDetails = struct {
+    capabilities: c.VkSurfaceCapabilitiesKHR,
+    formats: std.ArrayList(c.VkSurfaceFormatKHR),
+    presentModes: std.ArrayList(c.VkPresentModeKHR),
+
+    fn init(allocator: *const std.mem.Allocator) !*SwapChainSupportDetails {
+        const details = try allocator.create(SwapChainSupportDetails);
+        details.capabilities = undefined;
+        details.formats = std.ArrayList(c.VkSurfaceFormatKHR).init(allocator.*);
+        details.presentModes = std.ArrayList(c.VkPresentModeKHR).init(allocator.*);
+
+        return details;
+    }
+
+    fn deinit(self: *SwapChainSupportDetails, allocator: *const std.mem.Allocator) void {
+        self.formats.deinit();
+        self.formats = undefined;
+        self.presentModes.deinit();
+        self.presentModes = undefined;
+
+        allocator.destroy(self);
+    }
+};
+
 const HelloTriangleApplication = struct {
     window: ?*c.GLFWwindow = undefined,
     surface: c.VkSurfaceKHR = undefined,
+
+    swapChain: c.VkSwapchainKHR = undefined,
+    swapChainImages: []c.VkImage = undefined,
+    swapChainImageFormat: c.VkFormat = undefined,
+    swapChainExtent: c.VkExtent2D = undefined,
 
     instance: c.VkInstance = undefined,
     debugMessenger: c.VkDebugUtilsMessengerEXT = undefined,
@@ -81,6 +112,7 @@ const HelloTriangleApplication = struct {
         try self.createSurface();
         try self.pickPhysicalDevice();
         try self.createLogicalDevice();
+        try self.createSwapChain();
     }
 
     fn mainLoop(self: *HelloTriangleApplication) !void {
@@ -90,6 +122,8 @@ const HelloTriangleApplication = struct {
     }
 
     fn cleanup(self: *HelloTriangleApplication) !void {
+        c.vkDestroySwapchainKHR(self.device, self.swapChain, null);
+        self.allocator.free(self.swapChainImages);
         c.vkDestroyDevice(self.device, null);
 
         if (enableValidationLayers) {
@@ -120,12 +154,11 @@ const HelloTriangleApplication = struct {
 
         const extensions = try getRequiredExtensions(self.allocator);
         defer extensions.deinit();
-        var createInfo: c.VkInstanceCreateInfo = .{
-            .sType = c.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
-            .pApplicationInfo = &appInfo,
-            .enabledExtensionCount = @intCast(extensions.items.len),
-            .ppEnabledExtensionNames = extensions.items.ptr,
-        };
+        var createInfo: c.VkInstanceCreateInfo = .{};
+        createInfo.sType = c.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+        createInfo.pApplicationInfo = &appInfo;
+        createInfo.enabledExtensionCount = @intCast(extensions.items.len);
+        createInfo.ppEnabledExtensionNames = extensions.items.ptr;
         var debugCreateInfo: c.VkDebugUtilsMessengerCreateInfoEXT = undefined;
         if (enableValidationLayers) {
             createInfo.enabledLayerCount = validationLayers.len;
@@ -135,7 +168,6 @@ const HelloTriangleApplication = struct {
             createInfo.pNext = &debugCreateInfo;
         } else {
             createInfo.enabledLayerCount = 0;
-
             createInfo.pNext = null;
         }
 
@@ -224,7 +256,8 @@ const HelloTriangleApplication = struct {
             .queueCreateInfoCount = @intCast(queueCreateInfos.items.len),
             .pQueueCreateInfos = queueCreateInfos.items.ptr,
             .pEnabledFeatures = &deviceFeatures,
-            .enabledExtensionCount = 0,
+            .enabledExtensionCount = @intCast(deviceExtensions.len),
+            .ppEnabledExtensionNames = deviceExtensions.ptr,
         };
 
         if (c.vkCreateDevice(self.physicalDevice, &createInfo, null, &self.device) != c.VK_SUCCESS) {
@@ -235,10 +268,160 @@ const HelloTriangleApplication = struct {
         c.vkGetDeviceQueue(self.device, indices.presentFamily.?, 0, &self.presentQueue);
     }
 
+    fn createSwapChain(self: *HelloTriangleApplication) !void {
+        const swapChainSupport = try querySwapChainSupport(self.physicalDevice, self.surface, self.allocator);
+        defer swapChainSupport.deinit(self.allocator);
+
+        const surfaceFormat = chooseSwapSurfaceFormat(&swapChainSupport.formats);
+        self.swapChainImageFormat = surfaceFormat.format;
+
+        const presentMode = chooseSwapPresentMode(&swapChainSupport.presentModes);
+
+        const extent = chooseSwapExtent(self, &swapChainSupport.capabilities);
+        self.swapChainExtent = extent;
+
+        var imageCount: u32 = swapChainSupport.capabilities.minImageCount + 1;
+        if (swapChainSupport.capabilities.maxImageCount > 0 and imageCount > swapChainSupport.capabilities.maxImageCount) {
+            imageCount = swapChainSupport.capabilities.maxImageCount;
+        }
+
+        var createInfo: c.VkSwapchainCreateInfoKHR = .{};
+        createInfo.sType = c.VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+        createInfo.surface = self.surface;
+        createInfo.minImageCount = imageCount;
+        createInfo.imageFormat = surfaceFormat.format;
+        createInfo.imageExtent = extent;
+        createInfo.imageArrayLayers = 1;
+        createInfo.imageUsage = c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+
+        const indices: QueueFamilyIndices = try findQueueFamilies(self.physicalDevice, self.surface, self.allocator);
+        const queueFamilyIndices = [_]u32{ indices.graphicsFamily.?, indices.presentFamily.? };
+        if (indices.graphicsFamily != indices.presentFamily) {
+            createInfo.imageSharingMode = c.VK_SHARING_MODE_CONCURRENT;
+            createInfo.queueFamilyIndexCount = 2;
+            createInfo.pQueueFamilyIndices = &queueFamilyIndices;
+        } else {
+            createInfo.imageSharingMode = c.VK_SHARING_MODE_EXCLUSIVE;
+        }
+
+        createInfo.preTransform = swapChainSupport.capabilities.currentTransform;
+        createInfo.compositeAlpha = c.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+        createInfo.presentMode = presentMode;
+        createInfo.clipped = c.VK_TRUE;
+        createInfo.oldSwapchain = @ptrCast(c.VK_NULL_HANDLE);
+
+        if (c.vkCreateSwapchainKHR(self.device, &createInfo, null, &self.swapChain) != c.VK_SUCCESS) {
+            return error.FailedToCreateSwapChain;
+        }
+
+        _ = c.vkGetSwapchainImagesKHR(self.device, self.swapChain, &imageCount, null);
+        self.swapChainImages = try self.allocator.alloc(c.VkImage, imageCount);
+        _ = c.vkGetSwapchainImagesKHR(self.device, self.swapChain, &imageCount, self.swapChainImages.ptr);
+    }
+
+    fn chooseSwapSurfaceFormat(availableFormats: *const std.ArrayList(c.VkSurfaceFormatKHR)) c.VkSurfaceFormatKHR {
+        for (availableFormats.items) |availableFormat| {
+            if (availableFormat.format == c.VK_FORMAT_B8G8R8A8_SRGB and availableFormat.colorSpace == c.VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+                return availableFormat;
+            }
+        }
+        return availableFormats.items[0];
+    }
+
+    fn chooseSwapPresentMode(availablePresentModes: *const std.ArrayList(c.VkPresentModeKHR)) c.VkPresentModeKHR {
+        for (availablePresentModes.items) |availablePresentMode| {
+            if (availablePresentMode == c.VK_PRESENT_MODE_MAILBOX_KHR) {
+                return availablePresentMode;
+            }
+        }
+        return c.VK_PRESENT_MODE_FIFO_KHR;
+    }
+
+    fn chooseSwapExtent(self: *HelloTriangleApplication, capabilities: *const c.VkSurfaceCapabilitiesKHR) c.VkExtent2D {
+        if (capabilities.currentExtent.width != std.math.maxInt(u32)) {
+            return capabilities.currentExtent;
+        }
+
+        var width: u32 = undefined;
+        var height: u32 = undefined;
+        c.glfwGetFramebufferSize(self.window, @ptrCast(&width), @ptrCast(&height));
+
+        const actualExtent: c.VkExtent2D = .{
+            .width = std.math.clamp(
+                width,
+                capabilities.minImageExtent.width,
+                capabilities.maxImageExtent.width,
+            ),
+            .height = std.math.clamp(
+                height,
+                capabilities.minImageExtent.height,
+                capabilities.maxImageExtent.height,
+            ),
+        };
+
+        return actualExtent;
+    }
+
+    fn querySwapChainSupport(device: c.VkPhysicalDevice, surface: c.VkSurfaceKHR, allocator: *const std.mem.Allocator) !*SwapChainSupportDetails {
+        var details: *SwapChainSupportDetails = try SwapChainSupportDetails.init(allocator);
+
+        _ = c.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, surface, &details.capabilities);
+
+        var formatCount: u32 = 0;
+        _ = c.vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &formatCount, null);
+        if (formatCount != 0) {
+            try details.formats.ensureTotalCapacity(formatCount);
+            try details.formats.resize(formatCount);
+            _ = c.vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &formatCount, details.formats.items.ptr);
+        }
+
+        var presentModeCount: u32 = 0;
+        _ = c.vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, null);
+        if (presentModeCount != 0) {
+            try details.presentModes.ensureTotalCapacity(presentModeCount);
+            try details.presentModes.resize(presentModeCount);
+            _ = c.vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, details.presentModes.items.ptr);
+        }
+
+        return details;
+    }
+
     fn isDeviceSuitable(device: c.VkPhysicalDevice, surface: c.VkSurfaceKHR, allocator: *const std.mem.Allocator) !bool {
         const indices: QueueFamilyIndices = try findQueueFamilies(device, surface, allocator);
 
-        return indices.isComplete();
+        const extensionsSupported: bool = try checkDeviceExtensionSupport(device, allocator);
+
+        if (!extensionsSupported) {
+            return false;
+        }
+
+        var swapChainSupport: *SwapChainSupportDetails = try querySwapChainSupport(device, surface, allocator);
+        defer swapChainSupport.deinit(allocator);
+        const swapChainAdequate: bool = swapChainSupport.formats.items.len > 0 and swapChainSupport.presentModes.items.len > 0;
+
+        return indices.isComplete() and swapChainAdequate;
+    }
+
+    fn checkDeviceExtensionSupport(device: c.VkPhysicalDevice, allocator: *const std.mem.Allocator) !bool {
+        var extensionCount: u32 = 0;
+        _ = c.vkEnumerateDeviceExtensionProperties(device, null, &extensionCount, null);
+
+        const availableExtensions = try allocator.alloc(c.VkExtensionProperties, extensionCount);
+        defer allocator.free(availableExtensions);
+        _ = c.vkEnumerateDeviceExtensionProperties(device, null, &extensionCount, availableExtensions.ptr);
+
+        var requiredExtensions = std.StringHashMap(void).init(allocator.*);
+        defer requiredExtensions.deinit();
+        for (deviceExtensions) |extensionName| {
+            const name = std.mem.span(extensionName);
+            try requiredExtensions.put(name, {});
+        }
+        for (availableExtensions) |extension| {
+            const name = std.mem.sliceTo(&extension.extensionName, 0);
+            _ = requiredExtensions.remove(name);
+        }
+
+        return requiredExtensions.count() == 0;
     }
 
     fn findQueueFamilies(device: c.VkPhysicalDevice, surface: c.VkSurfaceKHR, allocator: *const std.mem.Allocator) !QueueFamilyIndices {
@@ -297,7 +480,7 @@ const HelloTriangleApplication = struct {
         _ = c.vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.ptr);
 
         outer: for (validationLayers) |layerName| {
-            const name = std.mem.sliceTo(layerName, 0);
+            const name = std.mem.span(layerName);
             for (availableLayers) |property| {
                 const property_name = std.mem.sliceTo(&property.layerName, 0);
                 if (std.mem.eql(u8, name, property_name)) {
