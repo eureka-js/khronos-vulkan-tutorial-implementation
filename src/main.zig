@@ -76,6 +76,7 @@ const HelloTriangleApplication = struct {
     swapChainImages: []c.VkImage = undefined,
     swapChainImageFormat: c.VkFormat = undefined,
     swapChainExtent: c.VkExtent2D = undefined,
+    swapChainImageViews: []c.VkImageView = undefined,
 
     instance: c.VkInstance = undefined,
     debugMessenger: c.VkDebugUtilsMessengerEXT = undefined,
@@ -113,6 +114,7 @@ const HelloTriangleApplication = struct {
         try self.pickPhysicalDevice();
         try self.createLogicalDevice();
         try self.createSwapChain();
+        try self.createImageViews();
     }
 
     fn mainLoop(self: *HelloTriangleApplication) !void {
@@ -122,6 +124,11 @@ const HelloTriangleApplication = struct {
     }
 
     fn cleanup(self: *HelloTriangleApplication) !void {
+        for (self.swapChainImageViews) |imageView| {
+            c.vkDestroyImageView(self.device, imageView, null);
+        }
+        self.allocator.free(self.swapChainImageViews);
+
         c.vkDestroySwapchainKHR(self.device, self.swapChain, null);
         self.allocator.free(self.swapChainImages);
         c.vkDestroyDevice(self.device, null);
@@ -317,6 +324,35 @@ const HelloTriangleApplication = struct {
         _ = c.vkGetSwapchainImagesKHR(self.device, self.swapChain, &imageCount, null);
         self.swapChainImages = try self.allocator.alloc(c.VkImage, imageCount);
         _ = c.vkGetSwapchainImagesKHR(self.device, self.swapChain, &imageCount, self.swapChainImages.ptr);
+    }
+
+    fn createImageViews(self: *HelloTriangleApplication) !void {
+        self.swapChainImageViews = try self.allocator.alloc(c.VkImageView, self.swapChainImages.len);
+        for (0..self.swapChainImages.len) |i| {
+            const createInfo: c.VkImageViewCreateInfo = .{
+                .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                .image = self.swapChainImages[i],
+                .viewType = c.VK_IMAGE_VIEW_TYPE_2D,
+                .format = self.swapChainImageFormat,
+                .components = .{
+                    .r = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+                    .g = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+                    .b = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+                    .a = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+                },
+                .subresourceRange = .{
+                    .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+            };
+
+            if (c.vkCreateImageView(self.device, &createInfo, null, &self.swapChainImageViews[i]) != c.VK_SUCCESS) {
+                return error.FailedToCreateImageViews;
+            }
+        }
     }
 
     fn chooseSwapSurfaceFormat(availableFormats: *const std.ArrayList(c.VkSurfaceFormatKHR)) c.VkSurfaceFormatKHR {
