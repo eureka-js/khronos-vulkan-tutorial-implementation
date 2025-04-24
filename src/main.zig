@@ -87,6 +87,8 @@ const HelloTriangleApplication = struct {
     graphicsQueue: c.VkQueue = undefined,
     presentQueue: c.VkQueue = undefined,
 
+    pipelineLayout: c.VkPipelineLayout = undefined,
+
     allocator: *const std.mem.Allocator,
 
     pub fn run(self: *HelloTriangleApplication) !void {
@@ -125,6 +127,8 @@ const HelloTriangleApplication = struct {
     }
 
     fn cleanup(self: *HelloTriangleApplication) !void {
+        c.vkDestroyPipelineLayout(self.device, self.pipelineLayout, null);
+
         for (self.swapChainImageViews) |imageView| {
             c.vkDestroyImageView(self.device, imageView, null);
         }
@@ -379,6 +383,79 @@ const HelloTriangleApplication = struct {
 
         const shaderStages = [_]c.VkPipelineShaderStageCreateInfo{ vertShaderStageInfo, fragShaderStageInfo };
         _ = shaderStages;
+
+        const vertexInputInfo: c.VkPipelineVertexInputStateCreateInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+            .vertexBindingDescriptionCount = 0,
+            .pVertexBindingDescriptions = null,
+            .vertexAttributeDescriptionCount = 0,
+            .pVertexAttributeDescriptions = null,
+        };
+        _ = vertexInputInfo;
+
+        const inputAssembly: c.VkPipelineInputAssemblyStateCreateInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+            .topology = c.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+            .primitiveRestartEnable = c.VK_FALSE,
+        };
+        _ = inputAssembly;
+
+        const viewportState: c.VkPipelineViewportStateCreateInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+            .viewportCount = 1,
+            .scissorCount = 1,
+        };
+        _ = viewportState;
+
+        const rasterizer: c.VkPipelineRasterizationStateCreateInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+            .depthClampEnable = c.VK_TRUE,
+            .rasterizerDiscardEnable = c.VK_FALSE,
+            .polygonMode = c.VK_POLYGON_MODE_FILL,
+            .lineWidth = 1.0,
+            .cullMode = c.VK_CULL_MODE_BACK_BIT,
+            .frontFace = c.VK_FRONT_FACE_CLOCKWISE,
+            .depthBiasEnable = c.VK_FALSE,
+        };
+        _ = rasterizer;
+
+        const multisampling: c.VkPipelineMultisampleStateCreateInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+            .sampleShadingEnable = c.VK_FALSE,
+            .rasterizationSamples = c.VK_SAMPLE_COUNT_1_BIT,
+        };
+        _ = multisampling;
+
+        const colorBlendAttachment: c.VkPipelineColorBlendAttachmentState = .{
+            .colorWriteMask = c.VK_COLOR_COMPONENT_R_BIT | c.VK_COLOR_COMPONENT_G_BIT | c.VK_COLOR_COMPONENT_B_BIT | c.VK_COLOR_COMPONENT_A_BIT,
+            .blendEnable = c.VK_FALSE,
+        };
+
+        const colorBlending: c.VkPipelineColorBlendStateCreateInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            .logicOpEnable = c.VK_FALSE,
+            .attachmentCount = 1,
+            .pAttachments = &colorBlendAttachment,
+        };
+        _ = colorBlending;
+
+        const pipelineLayoutInfo: c.VkPipelineLayoutCreateInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        };
+        if (c.vkCreatePipelineLayout(self.device, &pipelineLayoutInfo, null, &self.pipelineLayout) != c.VK_SUCCESS) {
+            return error.FailedToCreatePipelineLayout;
+        }
+
+        const dynamicStates: []const c.VkDynamicState = &[_]c.VkDynamicState{
+            c.VK_DYNAMIC_STATE_VIEWPORT,
+            c.VK_DYNAMIC_STATE_SCISSOR,
+        };
+        const dynamicState: c.VkPipelineDynamicStateCreateInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+            .dynamicStateCount = dynamicStates.len,
+            .pDynamicStates = dynamicStates.ptr,
+        };
+        _ = dynamicState;
 
         c.vkDestroyShaderModule(self.device, vertShaderModule, null);
         c.vkDestroyShaderModule(self.device, fragShaderModule, null);
