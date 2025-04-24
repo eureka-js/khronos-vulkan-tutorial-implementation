@@ -87,6 +87,7 @@ const HelloTriangleApplication = struct {
     graphicsQueue: c.VkQueue = undefined,
     presentQueue: c.VkQueue = undefined,
 
+    renderPass: c.VkRenderPass = undefined,
     pipelineLayout: c.VkPipelineLayout = undefined,
 
     allocator: *const std.mem.Allocator,
@@ -117,6 +118,7 @@ const HelloTriangleApplication = struct {
         try self.createLogicalDevice();
         try self.createSwapChain();
         try self.createImageViews();
+        try self.createRenderPass();
         try self.createGraphicsPipeline();
     }
 
@@ -128,6 +130,7 @@ const HelloTriangleApplication = struct {
 
     fn cleanup(self: *HelloTriangleApplication) !void {
         c.vkDestroyPipelineLayout(self.device, self.pipelineLayout, null);
+        c.vkDestroyRenderPass(self.device, self.renderPass, null);
 
         for (self.swapChainImageViews) |imageView| {
             c.vkDestroyImageView(self.device, imageView, null);
@@ -359,6 +362,42 @@ const HelloTriangleApplication = struct {
         }
     }
 
+    fn createRenderPass(self: *HelloTriangleApplication) !void {
+        const colorAttachment: c.VkAttachmentDescription = .{
+            .format = self.swapChainImageFormat,
+            .samples = c.VK_SAMPLE_COUNT_1_BIT,
+            .loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .storeOp = c.VK_ATTACHMENT_STORE_OP_STORE,
+            .stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
+            .finalLayout = c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        };
+
+        const colorAttachmentRef: c.VkAttachmentReference = .{
+            .attachment = 0,
+            .layout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        };
+
+        const subpass: c.VkSubpassDescription = .{
+            .pipelineBindPoint = c.VK_PIPELINE_BIND_POINT_GRAPHICS,
+            .colorAttachmentCount = 1,
+            .pColorAttachments = &colorAttachmentRef,
+        };
+
+        const renderPassInfo: c.VkRenderPassCreateInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+            .attachmentCount = 1,
+            .pAttachments = &colorAttachment,
+            .subpassCount = 1,
+            .pSubpasses = &subpass,
+        };
+
+        if (c.vkCreateRenderPass(self.device, &renderPassInfo, null, &self.renderPass) != c.VK_SUCCESS) {
+            return error.FailedToCreateRenderPass;
+        }
+    }
+
     fn createGraphicsPipeline(self: *HelloTriangleApplication) !void {
         const vertShaderCode = try readFile("shaders/shader.vert", self.allocator);
         defer self.allocator.free(vertShaderCode);
@@ -439,13 +478,6 @@ const HelloTriangleApplication = struct {
         };
         _ = colorBlending;
 
-        const pipelineLayoutInfo: c.VkPipelineLayoutCreateInfo = .{
-            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-        };
-        if (c.vkCreatePipelineLayout(self.device, &pipelineLayoutInfo, null, &self.pipelineLayout) != c.VK_SUCCESS) {
-            return error.FailedToCreatePipelineLayout;
-        }
-
         const dynamicStates: []const c.VkDynamicState = &[_]c.VkDynamicState{
             c.VK_DYNAMIC_STATE_VIEWPORT,
             c.VK_DYNAMIC_STATE_SCISSOR,
@@ -456,6 +488,13 @@ const HelloTriangleApplication = struct {
             .pDynamicStates = dynamicStates.ptr,
         };
         _ = dynamicState;
+
+        const pipelineLayoutInfo: c.VkPipelineLayoutCreateInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        };
+        if (c.vkCreatePipelineLayout(self.device, &pipelineLayoutInfo, null, &self.pipelineLayout) != c.VK_SUCCESS) {
+            return error.FailedToCreatePipelineLayout;
+        }
 
         c.vkDestroyShaderModule(self.device, vertShaderModule, null);
         c.vkDestroyShaderModule(self.device, fragShaderModule, null);
