@@ -115,6 +115,7 @@ const HelloTriangleApplication = struct {
         try self.createLogicalDevice();
         try self.createSwapChain();
         try self.createImageViews();
+        try self.createGraphicsPipeline();
     }
 
     fn mainLoop(self: *HelloTriangleApplication) !void {
@@ -266,7 +267,6 @@ const HelloTriangleApplication = struct {
             .enabledExtensionCount = @intCast(deviceExtensions.len),
             .ppEnabledExtensionNames = deviceExtensions.ptr,
         };
-
         if (c.vkCreateDevice(self.physicalDevice, &createInfo, null, &self.device) != c.VK_SUCCESS) {
             return error.FailedToCreateLogicalDevice;
         }
@@ -353,6 +353,50 @@ const HelloTriangleApplication = struct {
                 return error.FailedToCreateImageViews;
             }
         }
+    }
+
+    fn createGraphicsPipeline(self: *HelloTriangleApplication) !void {
+        const vertShaderCode = try readFile("shaders/shader.vert", self.allocator);
+        defer self.allocator.free(vertShaderCode);
+        const fragShaderCode = try readFile("shaders/shader.frag", self.allocator);
+        defer self.allocator.free(fragShaderCode);
+
+        const vertShaderModule: c.VkShaderModule = try self.createShaderModule(&vertShaderCode);
+        const fragShaderModule: c.VkShaderModule = try self.createShaderModule(&fragShaderCode);
+
+        const vertShaderStageInfo: c.VkPipelineShaderStageCreateInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = c.VK_SHADER_STAGE_VERTEX_BIT,
+            .module = vertShaderModule,
+            .pName = "main",
+        };
+        const fragShaderStageInfo: c.VkPipelineShaderStageCreateInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = c.VK_SHADER_STAGE_FRAGMENT_BIT,
+            .module = fragShaderModule,
+            .pName = "main",
+        };
+
+        const shaderStages = [_]c.VkPipelineShaderStageCreateInfo{ vertShaderStageInfo, fragShaderStageInfo };
+        _ = shaderStages;
+
+        c.vkDestroyShaderModule(self.device, vertShaderModule, null);
+        c.vkDestroyShaderModule(self.device, fragShaderModule, null);
+    }
+
+    fn createShaderModule(self: *HelloTriangleApplication, code: *const []u8) !c.VkShaderModule {
+        const createInfo: c.VkShaderModuleCreateInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .codeSize = code.len,
+            .pCode = @ptrCast(code),
+        };
+
+        var shaderModule: c.VkShaderModule = undefined;
+        if (c.vkCreateShaderModule(self.device, &createInfo, null, &shaderModule) != c.VK_SUCCESS) {
+            return error.FailedToCreateShaderModule;
+        }
+
+        return shaderModule;
     }
 
     fn chooseSwapSurfaceFormat(availableFormats: *const std.ArrayList(c.VkSurfaceFormatKHR)) c.VkSurfaceFormatKHR {
@@ -541,6 +585,16 @@ const HelloTriangleApplication = struct {
         std.debug.print("validation layer: {s}\n", .{pCallbackData.*.pMessage});
 
         return c.VK_FALSE;
+    }
+
+    fn readFile(fileName: []const u8, allocator: *const std.mem.Allocator) ![]u8 {
+        const file = try std.fs.cwd().openFile(fileName, .{});
+        defer file.close();
+
+        const stat = try file.stat();
+        const buffer: []u8 = try file.readToEndAlloc(allocator.*, stat.size);
+
+        return buffer;
     }
 };
 
