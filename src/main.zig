@@ -93,6 +93,9 @@ const HelloTriangleApplication = struct {
 
     swapChainFramebuffers: []c.VkFramebuffer = undefined,
 
+    commandPool: c.VkCommandPool = undefined,
+    commandBuffer: c.VkCommandBuffer = undefined,
+
     allocator: *const std.mem.Allocator,
 
     pub fn run(self: *HelloTriangleApplication) !void {
@@ -124,6 +127,8 @@ const HelloTriangleApplication = struct {
         try self.createRenderPass();
         try self.createGraphicsPipeline();
         try self.createFramebuffers();
+        try self.createCommandPool();
+        try self.createCommandBuffer();
     }
 
     fn mainLoop(self: *HelloTriangleApplication) !void {
@@ -133,6 +138,8 @@ const HelloTriangleApplication = struct {
     }
 
     fn cleanup(self: *HelloTriangleApplication) !void {
+        c.vkDestroyCommandPool(self.device, self.commandPool, null);
+
         for (self.swapChainFramebuffers) |framebuffer| {
             c.vkDestroyFramebuffer(self.device, framebuffer, null);
         }
@@ -320,12 +327,12 @@ const HelloTriangleApplication = struct {
 
         const indices: QueueFamilyIndices = try findQueueFamilies(self.physicalDevice, self.surface, self.allocator);
         const queueFamilyIndices = [_]u32{ indices.graphicsFamily.?, indices.presentFamily.? };
-        if (indices.graphicsFamily != indices.presentFamily) {
+        if (indices.graphicsFamily == indices.presentFamily) {
+            createInfo.imageSharingMode = c.VK_SHARING_MODE_EXCLUSIVE;
+        } else {
             createInfo.imageSharingMode = c.VK_SHARING_MODE_CONCURRENT;
             createInfo.queueFamilyIndexCount = 2;
             createInfo.pQueueFamilyIndices = &queueFamilyIndices;
-        } else {
-            createInfo.imageSharingMode = c.VK_SHARING_MODE_EXCLUSIVE;
         }
 
         createInfo.preTransform = swapChainSupport.capabilities.currentTransform;
@@ -542,6 +549,85 @@ const HelloTriangleApplication = struct {
             if (c.vkCreateFramebuffer(self.device, &frameBufferInfo, null, &self.swapChainFramebuffers[i]) != c.VK_SUCCESS) {
                 return error.FailedToCreateFramebuffer;
             }
+        }
+    }
+
+    fn createCommandPool(self: *HelloTriangleApplication) !void {
+        const queueFamilyIndices: QueueFamilyIndices = try findQueueFamilies(self.physicalDevice, self.surface, self.allocator);
+
+        const poolInfo: c.VkCommandPoolCreateInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+            .flags = c.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+            .queueFamilyIndex = queueFamilyIndices.graphicsFamily.?,
+        };
+
+        if (c.vkCreateCommandPool(self.device, &poolInfo, null, &self.commandPool) != c.VK_SUCCESS) {
+            return error.FailedToCreateCommandPool;
+        }
+    }
+
+    fn createCommandBuffer(self: *HelloTriangleApplication) !void {
+        const allocInfo: c.VkCommandBufferAllocateInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .commandPool = self.commandPool,
+            .level = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+
+        if (c.vkAllocateCommandBuffers(self.device, &allocInfo, &self.commandBuffer) != c.VK_SUCCESS) {
+            return error.FailedToCreateCommandBuffers;
+        }
+    }
+
+    fn recordCommandBuffer(self: *HelloTriangleApplication, commandBuffer: c.VkCommandBuffer, imageIndex: u32) !void {
+        const beginInfo: c.VkCommandBufferBeginInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .flags = 0, // Optional
+            .pInheritanceInfo = null, // Optional
+        };
+
+        if (c.vkBeginCommandBuffer(commandBuffer, &beginInfo) != c.VK_SUCCESS) {
+            return error.FailedToBeginRecordingFramebuffer;
+        }
+
+        const clearColor: c.VkClearValue = .{.{.{ 0.0, 0.0, 0.0, 1.0 }}};
+        const renderPassInfo: c.VkRenderPassBeginInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+            .renderPass = self.renderPass,
+            .framebuffer = self.swapChainFramebuffers[imageIndex],
+            .renderArea = .{
+                .offset = .{ 0, 0 },
+                .extent = self.swapChainExtent,
+            },
+            .clearValueCount = 1,
+            .pClearValues = &clearColor,
+        };
+
+        c.vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, c.VK_SUBPASS_CONTENTS_INLINE);
+
+        c.vkCmdBindPipeline(commandBuffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphicsPipeline);
+        const viewPort: c.VkViewport = .{
+            .x = 0.0,
+            .y = 0.0,
+            .width = @floatFromInt(self.swapChainExtent.width),
+            .height = @floatFromInt(self.swapChainExtent.height),
+            .minDepth = 0.0,
+            .maxdepth = 1.0,
+        };
+        c.vkCmdSetViewport(commandBuffer, 0, 1, &viewPort);
+
+        const scissor: c.VkRect2D = .{
+            .offset = .{ 0, 0 },
+            .extent = self.swapChainExtent,
+        };
+        c.vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+
+        c.vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+
+        c.vkCmdEndRenderPass(commandBuffer);
+
+        if (c.vkEndCommandBuffer(commandBuffer) != c.VK_SUCCESS) {
+            return error.FailedToRecordCommandBuffer;
         }
     }
 
