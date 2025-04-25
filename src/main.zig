@@ -91,6 +91,8 @@ const HelloTriangleApplication = struct {
     pipelineLayout: c.VkPipelineLayout = undefined,
     graphicsPipeline: c.VkPipeline = undefined,
 
+    swapChainFramebuffers: []c.VkFramebuffer = undefined,
+
     allocator: *const std.mem.Allocator,
 
     pub fn run(self: *HelloTriangleApplication) !void {
@@ -121,6 +123,7 @@ const HelloTriangleApplication = struct {
         try self.createImageViews();
         try self.createRenderPass();
         try self.createGraphicsPipeline();
+        try self.createFramebuffers();
     }
 
     fn mainLoop(self: *HelloTriangleApplication) !void {
@@ -130,6 +133,11 @@ const HelloTriangleApplication = struct {
     }
 
     fn cleanup(self: *HelloTriangleApplication) !void {
+        for (self.swapChainFramebuffers) |framebuffer| {
+            c.vkDestroyFramebuffer(self.device, framebuffer, null);
+        }
+        self.allocator.free(self.swapChainFramebuffers);
+
         c.vkDestroyPipeline(self.device, self.graphicsPipeline, null);
         c.vkDestroyPipelineLayout(self.device, self.pipelineLayout, null);
         c.vkDestroyRenderPass(self.device, self.renderPass, null);
@@ -514,6 +522,27 @@ const HelloTriangleApplication = struct {
 
         c.vkDestroyShaderModule(self.device, vertShaderModule, null);
         c.vkDestroyShaderModule(self.device, fragShaderModule, null);
+    }
+
+    fn createFramebuffers(self: *HelloTriangleApplication) !void {
+        self.swapChainFramebuffers = try self.allocator.alloc(c.VkFramebuffer, self.swapChainImageViews.len);
+
+        for (0..self.swapChainImageViews.len) |i| {
+            const attachments: []const c.VkImageView = &[_]c.VkImageView{self.swapChainImageViews[i]};
+            const frameBufferInfo: c.VkFramebufferCreateInfo = .{
+                .sType = c.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+                .renderPass = self.renderPass,
+                .attachmentCount = 1,
+                .pAttachments = attachments.ptr,
+                .width = self.swapChainExtent.width,
+                .height = self.swapChainExtent.height,
+                .layers = 1,
+            };
+
+            if (c.vkCreateFramebuffer(self.device, &frameBufferInfo, null, &self.swapChainFramebuffers[i]) != c.VK_SUCCESS) {
+                return error.FailedToCreateFramebuffer;
+            }
+        }
     }
 
     fn createShaderModule(self: *HelloTriangleApplication, code: []u8) !c.VkShaderModule {
