@@ -89,6 +89,7 @@ const HelloTriangleApplication = struct {
 
     renderPass: c.VkRenderPass = undefined,
     pipelineLayout: c.VkPipelineLayout = undefined,
+    graphicsPipeline: c.VkPipeline = undefined,
 
     allocator: *const std.mem.Allocator,
 
@@ -129,6 +130,7 @@ const HelloTriangleApplication = struct {
     }
 
     fn cleanup(self: *HelloTriangleApplication) !void {
+        c.vkDestroyPipeline(self.device, self.graphicsPipeline, null);
         c.vkDestroyPipelineLayout(self.device, self.pipelineLayout, null);
         c.vkDestroyRenderPass(self.device, self.renderPass, null);
 
@@ -399,13 +401,13 @@ const HelloTriangleApplication = struct {
     }
 
     fn createGraphicsPipeline(self: *HelloTriangleApplication) !void {
-        const vertShaderCode = try readFile("shaders/shader.vert", self.allocator);
+        const vertShaderCode = try readFile("shaders/vert.spv", self.allocator);
         defer self.allocator.free(vertShaderCode);
-        const fragShaderCode = try readFile("shaders/shader.frag", self.allocator);
+        const fragShaderCode = try readFile("shaders/frag.spv", self.allocator);
         defer self.allocator.free(fragShaderCode);
 
-        const vertShaderModule: c.VkShaderModule = try self.createShaderModule(&vertShaderCode);
-        const fragShaderModule: c.VkShaderModule = try self.createShaderModule(&fragShaderCode);
+        const vertShaderModule: c.VkShaderModule = try self.createShaderModule(vertShaderCode);
+        const fragShaderModule: c.VkShaderModule = try self.createShaderModule(fragShaderCode);
 
         const vertShaderStageInfo: c.VkPipelineShaderStageCreateInfo = .{
             .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -421,7 +423,6 @@ const HelloTriangleApplication = struct {
         };
 
         const shaderStages = [_]c.VkPipelineShaderStageCreateInfo{ vertShaderStageInfo, fragShaderStageInfo };
-        _ = shaderStages;
 
         const vertexInputInfo: c.VkPipelineVertexInputStateCreateInfo = .{
             .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
@@ -430,25 +431,22 @@ const HelloTriangleApplication = struct {
             .vertexAttributeDescriptionCount = 0,
             .pVertexAttributeDescriptions = null,
         };
-        _ = vertexInputInfo;
 
         const inputAssembly: c.VkPipelineInputAssemblyStateCreateInfo = .{
             .sType = c.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
             .topology = c.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
             .primitiveRestartEnable = c.VK_FALSE,
         };
-        _ = inputAssembly;
 
         const viewportState: c.VkPipelineViewportStateCreateInfo = .{
             .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
             .viewportCount = 1,
             .scissorCount = 1,
         };
-        _ = viewportState;
 
         const rasterizer: c.VkPipelineRasterizationStateCreateInfo = .{
             .sType = c.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-            .depthClampEnable = c.VK_TRUE,
+            .depthClampEnable = c.VK_FALSE,
             .rasterizerDiscardEnable = c.VK_FALSE,
             .polygonMode = c.VK_POLYGON_MODE_FILL,
             .lineWidth = 1.0,
@@ -456,27 +454,23 @@ const HelloTriangleApplication = struct {
             .frontFace = c.VK_FRONT_FACE_CLOCKWISE,
             .depthBiasEnable = c.VK_FALSE,
         };
-        _ = rasterizer;
 
         const multisampling: c.VkPipelineMultisampleStateCreateInfo = .{
             .sType = c.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
             .sampleShadingEnable = c.VK_FALSE,
             .rasterizationSamples = c.VK_SAMPLE_COUNT_1_BIT,
         };
-        _ = multisampling;
 
         const colorBlendAttachment: c.VkPipelineColorBlendAttachmentState = .{
             .colorWriteMask = c.VK_COLOR_COMPONENT_R_BIT | c.VK_COLOR_COMPONENT_G_BIT | c.VK_COLOR_COMPONENT_B_BIT | c.VK_COLOR_COMPONENT_A_BIT,
             .blendEnable = c.VK_FALSE,
         };
-
         const colorBlending: c.VkPipelineColorBlendStateCreateInfo = .{
             .sType = c.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
             .logicOpEnable = c.VK_FALSE,
             .attachmentCount = 1,
             .pAttachments = &colorBlendAttachment,
         };
-        _ = colorBlending;
 
         const dynamicStates: []const c.VkDynamicState = &[_]c.VkDynamicState{
             c.VK_DYNAMIC_STATE_VIEWPORT,
@@ -487,7 +481,6 @@ const HelloTriangleApplication = struct {
             .dynamicStateCount = dynamicStates.len,
             .pDynamicStates = dynamicStates.ptr,
         };
-        _ = dynamicState;
 
         const pipelineLayoutInfo: c.VkPipelineLayoutCreateInfo = .{
             .sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -496,15 +489,38 @@ const HelloTriangleApplication = struct {
             return error.FailedToCreatePipelineLayout;
         }
 
+        const pipelineInfo: c.VkGraphicsPipelineCreateInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .stageCount = 2,
+            .pStages = &shaderStages,
+            .pVertexInputState = &vertexInputInfo,
+            .pInputAssemblyState = &inputAssembly,
+            .pViewportState = &viewportState,
+            .pRasterizationState = &rasterizer,
+            .pMultisampleState = &multisampling,
+            .pDepthStencilState = null, // Optional
+            .pColorBlendState = &colorBlending,
+            .pDynamicState = &dynamicState,
+            .layout = self.pipelineLayout,
+            .renderPass = self.renderPass,
+            .subpass = 0,
+            .basePipelineHandle = @ptrCast(c.VK_NULL_HANDLE), // Optional
+            .basePipelineIndex = -1, // Optional
+        };
+
+        if (c.vkCreateGraphicsPipelines(self.device, @ptrCast(c.VK_NULL_HANDLE), 1, &pipelineInfo, null, &self.graphicsPipeline) != c.VK_SUCCESS) {
+            return error.FailedToCreateGraphicsPipeline;
+        }
+
         c.vkDestroyShaderModule(self.device, vertShaderModule, null);
         c.vkDestroyShaderModule(self.device, fragShaderModule, null);
     }
 
-    fn createShaderModule(self: *HelloTriangleApplication, code: *const []u8) !c.VkShaderModule {
+    fn createShaderModule(self: *HelloTriangleApplication, code: []u8) !c.VkShaderModule {
         const createInfo: c.VkShaderModuleCreateInfo = .{
             .sType = c.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
             .codeSize = code.len,
-            .pCode = @ptrCast(code),
+            .pCode = @ptrCast(@alignCast(code.ptr)),
         };
 
         var shaderModule: c.VkShaderModule = undefined;
