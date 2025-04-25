@@ -96,6 +96,10 @@ const HelloTriangleApplication = struct {
     commandPool: c.VkCommandPool = undefined,
     commandBuffer: c.VkCommandBuffer = undefined,
 
+    imageAvailableSemaphore: c.VkSemaphore = undefined,
+    renderFinishedSemaphore: c.VkSemaphore = undefined,
+    inFlightFence: c.VkFence = undefined,
+
     allocator: *const std.mem.Allocator,
 
     pub fn run(self: *HelloTriangleApplication) !void {
@@ -129,15 +133,23 @@ const HelloTriangleApplication = struct {
         try self.createFramebuffers();
         try self.createCommandPool();
         try self.createCommandBuffer();
+        try self.createSyncObjects();
     }
 
     fn mainLoop(self: *HelloTriangleApplication) !void {
         while (c.glfwWindowShouldClose(self.window.?) == 0) {
             c.glfwPollEvents();
+            try self.drawFrame();
         }
+
+        _ = c.vkDeviceWaitIdle(self.device);
     }
 
     fn cleanup(self: *HelloTriangleApplication) !void {
+        c.vkDestroySemaphore(self.device, self.imageAvailableSemaphore, null);
+        c.vkDestroySemaphore(self.device, self.renderFinishedSemaphore, null);
+        c.vkDestroyFence(self.device, self.inFlightFence, null);
+
         c.vkDestroyCommandPool(self.device, self.commandPool, null);
 
         for (self.swapChainFramebuffers) |framebuffer| {
@@ -402,12 +414,23 @@ const HelloTriangleApplication = struct {
             .pColorAttachments = &colorAttachmentRef,
         };
 
+        const dependency: c.VkSubpassDependency = .{
+            .srcSubpass = c.VK_SUBPASS_EXTERNAL,
+            .dstSubpass = 0,
+            .srcStageMask = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            .srcAccessMask = 0,
+            .dstStageMask = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            .dstAccessMask = c.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        };
+
         const renderPassInfo: c.VkRenderPassCreateInfo = .{
             .sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
             .attachmentCount = 1,
             .pAttachments = &colorAttachment,
             .subpassCount = 1,
             .pSubpasses = &subpass,
+            .dependencyCount = 1,
+            .pDependencies = &dependency,
         };
 
         if (c.vkCreateRenderPass(self.device, &renderPassInfo, null, &self.renderPass) != c.VK_SUCCESS) {
@@ -579,6 +602,24 @@ const HelloTriangleApplication = struct {
         }
     }
 
+    fn createSyncObjects(self: *HelloTriangleApplication) !void {
+        const semaphoreInfo: c.VkSemaphoreCreateInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+        };
+
+        const fenceInfo: c.VkFenceCreateInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+            .flags = c.VK_FENCE_CREATE_SIGNALED_BIT,
+        };
+
+        if (c.vkCreateSemaphore(self.device, &semaphoreInfo, null, &self.imageAvailableSemaphore) != c.VK_SUCCESS or
+            c.vkCreateSemaphore(self.device, &semaphoreInfo, null, &self.renderFinishedSemaphore) != c.VK_SUCCESS or
+            c.vkCreateFence(self.device, &fenceInfo, null, &self.inFlightFence) != c.VK_SUCCESS)
+        {
+            return error.FailedToCreateSemaphores;
+        }
+    }
+
     fn recordCommandBuffer(self: *HelloTriangleApplication, commandBuffer: c.VkCommandBuffer, imageIndex: u32) !void {
         const beginInfo: c.VkCommandBufferBeginInfo = .{
             .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -590,13 +631,13 @@ const HelloTriangleApplication = struct {
             return error.FailedToBeginRecordingFramebuffer;
         }
 
-        const clearColor: c.VkClearValue = .{.{.{ 0.0, 0.0, 0.0, 1.0 }}};
+        const clearColor: c.VkClearValue = .{ .color = .{ .float32 = .{ 0.0, 0.0, 0.0, 1.0 } } };
         const renderPassInfo: c.VkRenderPassBeginInfo = .{
             .sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
             .renderPass = self.renderPass,
             .framebuffer = self.swapChainFramebuffers[imageIndex],
             .renderArea = .{
-                .offset = .{ 0, 0 },
+                .offset = .{ .x = 0, .y = 0 },
                 .extent = self.swapChainExtent,
             },
             .clearValueCount = 1,
@@ -612,12 +653,12 @@ const HelloTriangleApplication = struct {
             .width = @floatFromInt(self.swapChainExtent.width),
             .height = @floatFromInt(self.swapChainExtent.height),
             .minDepth = 0.0,
-            .maxdepth = 1.0,
+            .maxDepth = 1.0,
         };
         c.vkCmdSetViewport(commandBuffer, 0, 1, &viewPort);
 
         const scissor: c.VkRect2D = .{
-            .offset = .{ 0, 0 },
+            .offset = .{ .x = 0, .y = 0 },
             .extent = self.swapChainExtent,
         };
         c.vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
@@ -629,6 +670,48 @@ const HelloTriangleApplication = struct {
         if (c.vkEndCommandBuffer(commandBuffer) != c.VK_SUCCESS) {
             return error.FailedToRecordCommandBuffer;
         }
+    }
+
+    fn drawFrame(self: *HelloTriangleApplication) !void {
+        _ = c.vkWaitForFences(self.device, 1, &self.inFlightFence, c.VK_TRUE, c.UINT64_MAX);
+        _ = c.vkResetFences(self.device, 1, &self.inFlightFence);
+
+        var imageIndex: u32 = undefined;
+        _ = c.vkAcquireNextImageKHR(self.device, self.swapChain, c.UINT64_MAX, self.imageAvailableSemaphore, @ptrCast(c.VK_NULL_HANDLE), &imageIndex);
+
+        _ = c.vkResetCommandBuffer(self.commandBuffer, 0);
+        try self.recordCommandBuffer(self.commandBuffer, imageIndex);
+
+        const waitSemaphores: []const c.VkSemaphore = &[_]c.VkSemaphore{self.imageAvailableSemaphore};
+        const waitStages: []const c.VkPipelineStageFlags = &[_]c.VkPipelineStageFlags{c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+        const signalSemaphores: []const c.VkSemaphore = &[_]c.VkSemaphore{self.renderFinishedSemaphore};
+        const submitInfo: c.VkSubmitInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = waitSemaphores.ptr,
+            .pWaitDstStageMask = waitStages.ptr,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &self.commandBuffer,
+            .signalSemaphoreCount = 1,
+            .pSignalSemaphores = signalSemaphores.ptr,
+        };
+
+        if (c.vkQueueSubmit(self.graphicsQueue, 1, &submitInfo, self.inFlightFence) != c.VK_SUCCESS) {
+            return error.FailedToSubmitDrawCommandBuffer;
+        }
+
+        const swapChains: []const c.VkSwapchainKHR = &[_]c.VkSwapchainKHR{self.swapChain};
+        const presentInfo: c.VkPresentInfoKHR = .{
+            .sType = c.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = signalSemaphores.ptr,
+            .swapchainCount = 1,
+            .pSwapchains = swapChains.ptr,
+            .pImageIndices = &imageIndex,
+            .pResults = null, // Optional
+        };
+
+        _ = c.vkQueuePresentKHR(self.presentQueue, &presentInfo);
     }
 
     fn createShaderModule(self: *HelloTriangleApplication, code: []u8) !c.VkShaderModule {
