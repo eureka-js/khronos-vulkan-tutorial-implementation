@@ -8,13 +8,14 @@ const builtin = @import("builtin");
 
 const WIDTH: u32 = 800;
 const HEIGHT: u32 = 600;
+const MAX_FRAMES_IN_FLIGHT: u32 = 2;
 
 const validationLayers: []const [*c]const u8 = &[_][*c]const u8{"VK_LAYER_KHRONOS_validation"};
 const enableValidationLayers = builtin.mode == .Debug;
 
 const deviceExtensions: []const [*c]const u8 = &[_][*c]const u8{c.VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 
-fn CreateDebugUtilMessengerEXT(
+fn createDebugUtilMessengerEXT(
     instance: c.VkInstance,
     pCreateInfo: *c.VkDebugUtilsMessengerCreateInfoEXT,
     pAllocator: ?*const c.VkAllocationCallbacks,
@@ -94,11 +95,13 @@ const HelloTriangleApplication = struct {
     swapChainFramebuffers: []c.VkFramebuffer = undefined,
 
     commandPool: c.VkCommandPool = undefined,
-    commandBuffer: c.VkCommandBuffer = undefined,
+    commandBuffers: [MAX_FRAMES_IN_FLIGHT]c.VkCommandBuffer = undefined,
 
-    imageAvailableSemaphore: c.VkSemaphore = undefined,
-    renderFinishedSemaphore: c.VkSemaphore = undefined,
-    inFlightFence: c.VkFence = undefined,
+    imageAvailableSemaphores: [MAX_FRAMES_IN_FLIGHT]c.VkSemaphore = undefined,
+    renderFinishedSemaphores: [MAX_FRAMES_IN_FLIGHT]c.VkSemaphore = undefined,
+    inFlightFences: [MAX_FRAMES_IN_FLIGHT]c.VkFence = undefined,
+
+    currentFrame: u32 = 0,
 
     allocator: *const std.mem.Allocator,
 
@@ -132,7 +135,7 @@ const HelloTriangleApplication = struct {
         try self.createGraphicsPipeline();
         try self.createFramebuffers();
         try self.createCommandPool();
-        try self.createCommandBuffer();
+        try self.createCommandBuffers();
         try self.createSyncObjects();
     }
 
@@ -146,9 +149,11 @@ const HelloTriangleApplication = struct {
     }
 
     fn cleanup(self: *HelloTriangleApplication) !void {
-        c.vkDestroySemaphore(self.device, self.imageAvailableSemaphore, null);
-        c.vkDestroySemaphore(self.device, self.renderFinishedSemaphore, null);
-        c.vkDestroyFence(self.device, self.inFlightFence, null);
+        for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+            c.vkDestroySemaphore(self.device, self.imageAvailableSemaphores[i], null);
+            c.vkDestroySemaphore(self.device, self.renderFinishedSemaphores[i], null);
+            c.vkDestroyFence(self.device, self.inFlightFences[i], null);
+        }
 
         c.vkDestroyCommandPool(self.device, self.commandPool, null);
 
@@ -237,7 +242,7 @@ const HelloTriangleApplication = struct {
 
         var createInfo: c.VkDebugUtilsMessengerCreateInfoEXT = undefined;
         populateDebugMessengerCreateInfo(&createInfo);
-        if (CreateDebugUtilMessengerEXT(self.instance, &createInfo, null, &self.debugMessenger) != c.VK_SUCCESS) {
+        if (createDebugUtilMessengerEXT(self.instance, &createInfo, null, &self.debugMessenger) != c.VK_SUCCESS) {
             return error.FailedToSetupDebugMessenger;
         }
     }
@@ -338,12 +343,12 @@ const HelloTriangleApplication = struct {
         createInfo.imageUsage = c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
         const indices: QueueFamilyIndices = try findQueueFamilies(self.physicalDevice, self.surface, self.allocator);
-        const queueFamilyIndices = [_]u32{ indices.graphicsFamily.?, indices.presentFamily.? };
         if (indices.graphicsFamily == indices.presentFamily) {
             createInfo.imageSharingMode = c.VK_SHARING_MODE_EXCLUSIVE;
         } else {
             createInfo.imageSharingMode = c.VK_SHARING_MODE_CONCURRENT;
             createInfo.queueFamilyIndexCount = 2;
+            const queueFamilyIndices = [_]u32{ indices.graphicsFamily.?, indices.presentFamily.? };
             createInfo.pQueueFamilyIndices = &queueFamilyIndices;
         }
 
@@ -589,15 +594,15 @@ const HelloTriangleApplication = struct {
         }
     }
 
-    fn createCommandBuffer(self: *HelloTriangleApplication) !void {
+    fn createCommandBuffers(self: *HelloTriangleApplication) !void {
         const allocInfo: c.VkCommandBufferAllocateInfo = .{
             .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
             .commandPool = self.commandPool,
             .level = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-            .commandBufferCount = 1,
+            .commandBufferCount = @intCast(self.commandBuffers.len),
         };
 
-        if (c.vkAllocateCommandBuffers(self.device, &allocInfo, &self.commandBuffer) != c.VK_SUCCESS) {
+        if (c.vkAllocateCommandBuffers(self.device, &allocInfo, &self.commandBuffers) != c.VK_SUCCESS) {
             return error.FailedToCreateCommandBuffers;
         }
     }
@@ -612,22 +617,24 @@ const HelloTriangleApplication = struct {
             .flags = c.VK_FENCE_CREATE_SIGNALED_BIT,
         };
 
-        if (c.vkCreateSemaphore(self.device, &semaphoreInfo, null, &self.imageAvailableSemaphore) != c.VK_SUCCESS or
-            c.vkCreateSemaphore(self.device, &semaphoreInfo, null, &self.renderFinishedSemaphore) != c.VK_SUCCESS or
-            c.vkCreateFence(self.device, &fenceInfo, null, &self.inFlightFence) != c.VK_SUCCESS)
-        {
-            return error.FailedToCreateSemaphores;
+        for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+            if (c.vkCreateSemaphore(self.device, &semaphoreInfo, null, &self.imageAvailableSemaphores[i]) != c.VK_SUCCESS or
+                c.vkCreateSemaphore(self.device, &semaphoreInfo, null, &self.renderFinishedSemaphores[i]) != c.VK_SUCCESS or
+                c.vkCreateFence(self.device, &fenceInfo, null, &self.inFlightFences[i]) != c.VK_SUCCESS)
+            {
+                return error.FailedToCreateSemaphores;
+            }
         }
     }
 
-    fn recordCommandBuffer(self: *HelloTriangleApplication, commandBuffer: c.VkCommandBuffer, imageIndex: u32) !void {
+    fn recordCommandBuffer(self: *HelloTriangleApplication, commandBuffers: c.VkCommandBuffer, imageIndex: u32) !void {
         const beginInfo: c.VkCommandBufferBeginInfo = .{
             .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
             .flags = 0, // Optional
             .pInheritanceInfo = null, // Optional
         };
 
-        if (c.vkBeginCommandBuffer(commandBuffer, &beginInfo) != c.VK_SUCCESS) {
+        if (c.vkBeginCommandBuffer(commandBuffers, &beginInfo) != c.VK_SUCCESS) {
             return error.FailedToBeginRecordingFramebuffer;
         }
 
@@ -644,9 +651,9 @@ const HelloTriangleApplication = struct {
             .pClearValues = &clearColor,
         };
 
-        c.vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, c.VK_SUBPASS_CONTENTS_INLINE);
+        c.vkCmdBeginRenderPass(commandBuffers, &renderPassInfo, c.VK_SUBPASS_CONTENTS_INLINE);
 
-        c.vkCmdBindPipeline(commandBuffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphicsPipeline);
+        c.vkCmdBindPipeline(commandBuffers, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphicsPipeline);
         const viewPort: c.VkViewport = .{
             .x = 0.0,
             .y = 0.0,
@@ -655,48 +662,48 @@ const HelloTriangleApplication = struct {
             .minDepth = 0.0,
             .maxDepth = 1.0,
         };
-        c.vkCmdSetViewport(commandBuffer, 0, 1, &viewPort);
+        c.vkCmdSetViewport(commandBuffers, 0, 1, &viewPort);
 
         const scissor: c.VkRect2D = .{
             .offset = .{ .x = 0, .y = 0 },
             .extent = self.swapChainExtent,
         };
-        c.vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+        c.vkCmdSetScissor(commandBuffers, 0, 1, &scissor);
 
-        c.vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+        c.vkCmdDraw(commandBuffers, 3, 1, 0, 0);
 
-        c.vkCmdEndRenderPass(commandBuffer);
+        c.vkCmdEndRenderPass(commandBuffers);
 
-        if (c.vkEndCommandBuffer(commandBuffer) != c.VK_SUCCESS) {
+        if (c.vkEndCommandBuffer(commandBuffers) != c.VK_SUCCESS) {
             return error.FailedToRecordCommandBuffer;
         }
     }
 
     fn drawFrame(self: *HelloTriangleApplication) !void {
-        _ = c.vkWaitForFences(self.device, 1, &self.inFlightFence, c.VK_TRUE, c.UINT64_MAX);
-        _ = c.vkResetFences(self.device, 1, &self.inFlightFence);
+        _ = c.vkWaitForFences(self.device, 1, &self.inFlightFences[self.currentFrame], c.VK_TRUE, c.UINT64_MAX);
+        _ = c.vkResetFences(self.device, 1, &self.inFlightFences[self.currentFrame]);
 
         var imageIndex: u32 = undefined;
-        _ = c.vkAcquireNextImageKHR(self.device, self.swapChain, c.UINT64_MAX, self.imageAvailableSemaphore, @ptrCast(c.VK_NULL_HANDLE), &imageIndex);
+        _ = c.vkAcquireNextImageKHR(self.device, self.swapChain, c.UINT64_MAX, self.imageAvailableSemaphores[self.currentFrame], @ptrCast(c.VK_NULL_HANDLE), &imageIndex);
 
-        _ = c.vkResetCommandBuffer(self.commandBuffer, 0);
-        try self.recordCommandBuffer(self.commandBuffer, imageIndex);
+        _ = c.vkResetCommandBuffer(self.commandBuffers[self.currentFrame], 0);
+        try self.recordCommandBuffer(self.commandBuffers[self.currentFrame], imageIndex);
 
-        const waitSemaphores: []const c.VkSemaphore = &[_]c.VkSemaphore{self.imageAvailableSemaphore};
+        const waitSemaphores: []const c.VkSemaphore = &[_]c.VkSemaphore{self.imageAvailableSemaphores[self.currentFrame]};
         const waitStages: []const c.VkPipelineStageFlags = &[_]c.VkPipelineStageFlags{c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
-        const signalSemaphores: []const c.VkSemaphore = &[_]c.VkSemaphore{self.renderFinishedSemaphore};
+        const signalSemaphores: []const c.VkSemaphore = &[_]c.VkSemaphore{self.renderFinishedSemaphores[self.currentFrame]};
         const submitInfo: c.VkSubmitInfo = .{
             .sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO,
             .waitSemaphoreCount = 1,
             .pWaitSemaphores = waitSemaphores.ptr,
             .pWaitDstStageMask = waitStages.ptr,
             .commandBufferCount = 1,
-            .pCommandBuffers = &self.commandBuffer,
+            .pCommandBuffers = &self.commandBuffers[self.currentFrame],
             .signalSemaphoreCount = 1,
             .pSignalSemaphores = signalSemaphores.ptr,
         };
 
-        if (c.vkQueueSubmit(self.graphicsQueue, 1, &submitInfo, self.inFlightFence) != c.VK_SUCCESS) {
+        if (c.vkQueueSubmit(self.graphicsQueue, 1, &submitInfo, self.inFlightFences[self.currentFrame]) != c.VK_SUCCESS) {
             return error.FailedToSubmitDrawCommandBuffer;
         }
 
@@ -712,6 +719,8 @@ const HelloTriangleApplication = struct {
         };
 
         _ = c.vkQueuePresentKHR(self.presentQueue, &presentInfo);
+
+        self.currentFrame = (self.currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
 
     fn createShaderModule(self: *HelloTriangleApplication, code: []u8) !c.VkShaderModule {
