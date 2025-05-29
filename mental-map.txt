@@ -1,0 +1,227 @@
+// High level mental map
+
+MAX_FRAMES_IN_FLIGHT: u32 = 2
+
+enableValidationLayers = if debug then true else false
+
+...
+
+HelloTriangleApplication
+    window:  GLFWwindow
+    surface: VkSurfaceKHR
+
+    swapChain:            VkSwapchainKHR
+    swapChainImages:      []VkImage
+    swapChainImageFormat: VkFormat
+    swapChainExtent:      VkExtent2D
+    swapChainImageViews:  []VkImageView
+
+    instance:       VkInstance
+    debugMessenger: VkDebugUtilsMessengerEXT
+
+    physicalDevice: VkPhysicalDevice
+    device:         VkDevice
+
+    graphicsQueue: VkQueue
+    presentQueue:  VkQueue
+
+    renderPass:       VkRenderPass
+    pipelineLayout:   VkPipelineLayout
+    graphicsPipeline: VkPipeline
+
+    swapChainFramebuffers: []VkFrameBuffer
+
+    commandPool:   VkCommandPool
+    commandBuffers: [MAX_FRAMES_IN_FLIGHT]VkCommandBuffer
+
+    imageAvailableSemaphores: [MAX_FRAMES_IN_FLIGHT]VkSemaphore
+    renderFinishedSemaphores: [MAX_FRAMES_IN_FLIGHT]VkSemaphore
+    inFlightFences:           [MAX_FRAMES_IN_FLIGHT]VkFence
+
+    framebufferResized: bool = false
+
+    currentFrame: u32 = 0
+
+    initWindow
+        glfwInit
+        glfwWindowHint
+
+        glfwCreateWindow
+        glfwSetFramebufferPointer self
+        glfwSetFramebufferSizeCallback framebufferResizeCallback
+
+    framebufferResizeCallback
+        app = glfwGetWindowUserPointer
+        app.framebufferResized = true;
+
+    initVulkan
+        createInstance
+            checkValidationLayerSupport
+                vkEnumerateInstanceLayerProperties
+            getRequiredExtensions
+                glfwGetRequiredInstanceExtension
+            vkCreateInstance
+
+        setupDebugMessenger
+            if enableValidationLayers
+                createDebugUtilMessengerEXT
+                    vk.GetInstanceProcAddr "vkCreateDebugUtilsMessengerEXT"
+
+        createSurface
+            glfwCreateWindowSurface
+
+        pickPhysicalDevice
+            vkEnumeratePhysicalDevices
+            isDeviceSuitable
+                findQueueFamilies
+                    vkGetPhysicalDeviceQueueFamilyProperties
+                    vkGetPhysicalDeviceSurfaceSupportKHR
+                checkDeviceExtensionSupport
+                    vkEnumerateDeviceExtensionProperties
+                querySwapChainSupport
+                    vkGetPhysicalDeviceSurfaceCapabilitiesKHR
+                    vkGetPhysicalDeviceSurfaceFormatsKHR
+                    vkGetPhysicalDeviceSurfacePresentModesKHR
+
+        createLogicalDevice
+            findQueueFamilies
+                vkGetPhysicalDeviceQueueFamilyProperties
+                vkGetPhysicalDeviceSurfaceSupportKHR
+            vkCreateDevice
+            vkGetDeviceQueue
+            vkGetDeviceQueue
+
+        createSwapChain
+            querySwapChainSupport
+                vkGetPhysicalDeviceSurfaceCapabilitiesKHR
+                vkGetPhysicalDeviceSurfaceFormatsKHR
+                vkGetPhysicalDeviceSurfacePresentModesKHR
+            chooseSwapExtent
+                glfwGetFramebufferSize
+            findQueueFamilies
+                vkGetPhysicalDeviceQueueFamilyProperties
+                vkGetPhysicalDeviceSurfaceSupportKHR
+            vkCreateSwapchainKHR
+            vkGetSwapchainImagesKHR
+
+        createImageViews
+            vkCreateImageView
+
+        createRenderPass
+            vkCreateRenderPass
+
+        createGraphicsPipeline
+            createShaderModule
+                vkCreateShaderModule
+            createShaderModule
+                vkCreateShaderModule
+            vkCreatePipelineLayout
+            vkCreateGraphicsPipelines
+            vkDestroyShaderModule
+            vkDestroyShaderModule
+
+        createFramebuffers
+            for swapChainImageViews
+                vkCreateFramebuffer
+
+        createCommandPool
+            vkCreateCommandPool
+
+        createCommandBuffers
+            vkAllocateCommandBuffers
+
+        createSyncObjects
+            for i = 0; while i < MAX_FRAMES_IN_FLIGHT
+                vkCreateSemaphores imageAvailableSemaphores[i]
+                vkCreateSemaphores renderFinishedSemaphores[i]
+                vkCreateFences inFlightFences[i]
+
+    drawFrame
+        vkWaitForFences inFlightFences[currentFrame]
+
+        res = vkAcquireNextImageKHR imageAvailableSemaphore[currentFrame]
+        if res == VK_ERROR_OUT_OF_DATE_KHR
+            recreateSwapChain
+            return
+        else if res != VK_SUCCESS and res != VK_SUBOPTIMAL_KHR
+            return error.FailedToAcquireSwapChainImage
+
+        vkResetFences inFlightFences[currentFrame]
+
+        vkResetCommandBuffer
+        recordCommandBuffer
+            vkBeginCommandBuffer
+            vkCmdBeginRenderPass
+            vkCmdBindPipeline
+            vkCmdSetViewport
+            vkCmdSetScissor
+            vkCmdDraw
+            vkCmdEndRenderPass
+            vkEndCommandBuffer
+
+        res = vkQueueSubmit inFlightFence[currentFrame] w=imageAvailableSemaphore[currentFrame] s=renderFinishedSemaphore[currentFrame]
+        if res == VK_ERROR_OUT_OF_DATE_KHR or res == VK_SUBOPTIMAL_KHR or framebufferResized
+            framebufferResized = false
+            recreateSwapChain
+        else if res != VK_SUCCESS
+            return error.FailedToSubmitSwapChainImage
+
+        vkQueuePresentKHR w=imageAvailableSemaphore[currentFrame]
+        currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT
+
+    mainLoop
+        while glfwWindowShouldClose == 0
+            glfwPollEvents
+            drawFrame
+        vkDeviceWaitIdle
+
+    cleanup
+        cleanupSwapChain
+
+        vkDestroyPipeline
+        vkDestroyPipelineLayout
+
+        vkDestroyRenderPass
+
+        for i = 0; while i < MAX_FRAMES_IN_FLIGHT
+            vkDestroySemaphore renderFinishedSemaphoresj[i]
+            vkDestroySemaphore imageAvailableSemaphores[i]
+            vkDestroyFence inFlightFences[i]
+
+        vkDestroyCommandPool
+
+        vkDestroyDevice
+
+        if enableValidationLayers
+            destroyDebugUtilsMessengerEXT
+                vkGetInstanceProcAddr "vkDestroyDebugUtilsMessengerEXT"
+
+        vkDestroySurfaceKHR
+        vkDestroyInstance
+
+        glfwDestroyWindow
+
+        glfwTerminate
+
+    cleanupSwapChain
+        for framebuffer in swapChainFramebuffers
+            vkDestroyFramebuffer
+
+        for imageView in swapChainImageViews
+            vkDestroyImageView
+
+        vkDestroySwapchainKHR
+
+    recreateSwapChain
+        glfwGetFramebufferSize width height
+        while width == 0 and height == 0
+            glfwGetFramebufferSize width height
+            glfwWaitEvents
+
+        vkDeviceWaitIdle
+
+        cleanupSwapChain
+
+        createSwapChain
+        createImageViews
+        createFramebuffers
