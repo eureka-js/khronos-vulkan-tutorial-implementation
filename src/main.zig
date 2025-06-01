@@ -108,10 +108,10 @@ const Vertex = struct {
     }
 };
 
-const vertices: []Vertex = .{
-    .{.{0.0, -0.5}, .{1.0, 0.0, 0.0}},
-    .{.{0.5, 0.5}, .{0.0, 1.0, 0.0}},
-    .{.{-0.5, 0.5}, .{0.0, 0.0, 1.0}},
+const vertices: [3]Vertex = .{
+    .{.pos = .{ 0.0, -0.5}, .color = .{1.0, 0.0, 0.0}},
+    .{.pos = .{ 0.5,  0.5}, .color = .{0.0, 1.0, 0.0}},
+    .{.pos = .{-0.5,  0.5}, .color = .{0.0, 0.0, 1.0}},
 };
 
 const HelloTriangleApplication = struct {
@@ -149,6 +149,9 @@ const HelloTriangleApplication = struct {
     framebufferResized: bool = false,
 
     currentFrame: u32 = 0,
+
+    vertexBuffer: c.VkBuffer = undefined,
+    vertexBufferMemory: c.VkDeviceMemory = undefined,
 
     allocator: *const std.mem.Allocator,
 
@@ -190,6 +193,7 @@ const HelloTriangleApplication = struct {
         try self.createGraphicsPipeline();
         try self.createFramebuffers();
         try self.createCommandPool();
+        try self.createVertexBuffer();
         try self.createCommandBuffers();
         try self.createSyncObjects();
     }
@@ -205,6 +209,9 @@ const HelloTriangleApplication = struct {
 
     fn cleanup(self: *HelloTriangleApplication) !void {
         self.cleanupSwapChain();
+
+        c.vkDestroyBuffer(self.device, self.vertexBuffer, null);
+        c.vkFreeMemory(self.device, self.vertexBufferMemory, null);
 
         c.vkDestroyPipeline(self.device, self.graphicsPipeline, null);
         c.vkDestroyPipelineLayout(self.device, self.pipelineLayout, null);
@@ -674,6 +681,41 @@ const HelloTriangleApplication = struct {
         }
     }
 
+    fn createVertexBuffer(self: *HelloTriangleApplication) !void {
+        const bufferInfo: c.VkBufferCreateInfo = .{
+            .sType       = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .size        = @sizeOf(@TypeOf(vertices[0])) * vertices.len,
+            .usage       = c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            .sharingMode = c.VK_SHARING_MODE_EXCLUSIVE,
+        };
+
+        if (c.vkCreateBuffer(self.device, &bufferInfo, null, &self.vertexBuffer) != c.VK_SUCCESS) {
+            return error.FailedToCreateVertexBuffer;
+        }
+
+        var memRequirements: c.VkMemoryRequirements = undefined;
+        c.vkGetBufferMemoryRequirements(self.device, self.vertexBuffer, &memRequirements);
+        const allocInfo: c.VkMemoryAllocateInfo = .{
+            .sType           = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .allocationSize  = memRequirements.size,
+            .memoryTypeIndex = try self.findMemoryType(
+                memRequirements.memoryTypeBits,
+                c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+            ),
+        };
+
+        if (c.vkAllocateMemory(self.device, &allocInfo, null, &self.vertexBufferMemory) != c.VK_SUCCESS) {
+            return error.FailedToAllocateVertexBufferMemory;
+        }
+
+        _ = c.vkBindBufferMemory(self.device, self.vertexBuffer, self.vertexBufferMemory, 0);
+
+        var data: ?[]Vertex = undefined;
+        _ = c.vkMapMemory(self.device, self.vertexBufferMemory, 0, bufferInfo.size, 0, @ptrCast(&data));
+        @memcpy(data.?.ptr, &vertices);
+        c.vkUnmapMemory(self.device, self.vertexBufferMemory);
+    }
+
     fn createCommandBuffers(self: *HelloTriangleApplication) !void {
         const allocInfo: c.VkCommandBufferAllocateInfo = .{
             .sType              = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -685,6 +727,18 @@ const HelloTriangleApplication = struct {
         if (c.vkAllocateCommandBuffers(self.device, &allocInfo, &self.commandBuffers) != c.VK_SUCCESS) {
             return error.FailedToCreateCommandBuffers;
         }
+    }
+
+    fn findMemoryType(self: *HelloTriangleApplication, typeFilter: u32, properties: c.VkMemoryPropertyFlags) !u32 {
+        var memProperties: c.VkPhysicalDeviceMemoryProperties = undefined;
+        c.vkGetPhysicalDeviceMemoryProperties(self.physicalDevice, &memProperties);
+        for (0..memProperties.memoryTypeCount) |i| {
+            const bit = @as(u32, 1) << @intCast(i);
+            if (typeFilter & bit != 0 and (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+                return @intCast(i);
+            }
+        }
+        return error.FailedToFindSuitableMemoryType;
     }
 
     fn createSyncObjects(self: *HelloTriangleApplication) !void {
@@ -750,7 +804,11 @@ const HelloTriangleApplication = struct {
         };
         c.vkCmdSetScissor(commandBuffers, 0, 1, &scissor);
 
-        c.vkCmdDraw(commandBuffers, 3, 1, 0, 0);
+        const vertexBuffers: []const c.VkBuffer     = &.{self.vertexBuffer};
+        const offsets:       []const c.VkDeviceSize = &.{0};
+        c.vkCmdBindVertexBuffers(commandBuffers, 0, 1, vertexBuffers.ptr, offsets.ptr);
+
+        c.vkCmdDraw(commandBuffers, vertices.len, 1, 0, 0);
 
         c.vkCmdEndRenderPass(commandBuffers);
 
