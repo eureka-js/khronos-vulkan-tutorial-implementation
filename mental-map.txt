@@ -31,7 +31,7 @@ HelloTriangleApplication
 
     swapChainFramebuffers: []VkFrameBuffer
 
-    commandPool:   VkCommandPool
+    commandPool:    VkCommandPool
     commandBuffers: [MAX_FRAMES_IN_FLIGHT]VkCommandBuffer
 
     imageAvailableSemaphores: [MAX_FRAMES_IN_FLIGHT]VkSemaphore

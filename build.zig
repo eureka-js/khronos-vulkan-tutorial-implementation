@@ -25,22 +25,25 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("xrandr");
     exe.linkSystemLibrary("xi");
 
-    // NOTE: Will have to use the local (non system) cglm library because I will have to
-    // comment out SIMD related functions with corresponding preprocessor directives
-    // that cause linkage errors (Zig bug due to it being unfinished?), and use plain c ones. (2025-04-21)
-    //const cglmModule  = b.createModule(.{
-    //    .target   = target,
-    //    .optimize = optimize,
-    //});
-    //const cglm        = b.addLibrary(.{
-    //    .name        = "cglm",
-    //    .root_module = cglmModule,
-    //});
-    //cglm.addCSourceFiles(.{
-    //    .files = &.{},
-    //    .flags = &.{},
-    //});
-    //cglm.installHeadersDirectory(b.path("libs/cglm/include/"), ".", .{});
-    //cglm.linkLibC();
-    //exe.linkLibrary(cglm);
+    //NOTE: Will have to use the local (non system) cglm library because I will have to
+    //comment out SIMD related functions with corresponding preprocessor directives
+    //that cause linkage errors (Zig bug due to it being unfinished?), and use plain c ones. (2025-04-21)
+    const cglmModule  = b.createModule(.{
+        .target   = target,
+        .optimize = optimize,
+    });
+    const cglm        = b.addLibrary(.{
+        .name        = "cglm",
+        .root_module = cglmModule,
+    });
+    cglm.addCSourceFiles(.{
+        .files = &.{
+            "libs/cglm/src/vec2.c",
+            "libs/cglm/src/vec3.c",
+        },
+        .flags = &.{},
+    });
+    cglm.installHeadersDirectory(b.path("libs/cglm/include/"), ".", .{});
+    cglm.linkLibC();
+    exe.linkLibrary(cglm);
 }

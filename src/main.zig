@@ -1,6 +1,7 @@
 const c = @cImport({
     @cDefine("GLFW_INCLUDE_VULKAN", "");
     @cInclude("GLFW/glfw3.h");
+    @cInclude("cglm/cglm.h");
 });
 
 const std     = @import("std");
@@ -71,6 +72,46 @@ const SwapChainSupportDetails = struct {
 
         allocator.destroy(self);
     }
+};
+
+const Vertex = struct {
+    pos:   c.vec2,
+    color: c.vec3,
+
+    fn getBindingDescription() c.VkVertexInputBindingDescription {
+        const bindingDescription: c.VkVertexInputBindingDescription = .{
+            .binding   = 0,
+            .stride    = @sizeOf(@This()),
+            .inputRate = c.VK_VERTEX_INPUT_RATE_VERTEX,
+        };
+
+        return bindingDescription;
+    }
+
+    fn getAttributeDescriptions() [2]c.VkVertexInputAttributeDescription {
+        const attributeDescriptions: [2]c.VkVertexInputAttributeDescription = .{
+            .{
+                .binding  = 0,
+                .location = 0,
+                .format   = c.VK_FORMAT_R32G32_SFLOAT,
+                .offset   = @offsetOf(@This(), "pos"),
+            },
+            .{
+                .binding  = 0,
+                .location = 1,
+                .format   = c.VK_FORMAT_R32G32B32_SFLOAT,
+                .offset   = @offsetOf(@This(), "color"),
+            },
+        };
+
+        return attributeDescriptions;
+    }
+};
+
+const vertices: []Vertex = .{
+    .{.{0.0, -0.5}, .{1.0, 0.0, 0.0}},
+    .{.{0.5, 0.5}, .{0.0, 1.0, 0.0}},
+    .{.{-0.5, 0.5}, .{0.0, 0.0, 1.0}},
 };
 
 const HelloTriangleApplication = struct {
@@ -504,12 +545,14 @@ const HelloTriangleApplication = struct {
 
         const shaderStages = [_]c.VkPipelineShaderStageCreateInfo{ vertShaderStageInfo, fragShaderStageInfo };
 
+        const bindingDescription    = Vertex.getBindingDescription();
+        const attributeDescriptions = Vertex.getAttributeDescriptions();
         const vertexInputInfo: c.VkPipelineVertexInputStateCreateInfo = .{
             .sType                           = c.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-            .vertexBindingDescriptionCount   = 0,
-            .pVertexBindingDescriptions      = null,
-            .vertexAttributeDescriptionCount = 0,
-            .pVertexAttributeDescriptions    = null,
+            .vertexBindingDescriptionCount   = 1,
+            .pVertexBindingDescriptions      = &bindingDescription,
+            .vertexAttributeDescriptionCount = attributeDescriptions.len,
+            .pVertexAttributeDescriptions    = &attributeDescriptions,
         };
 
         const inputAssembly: c.VkPipelineInputAssemblyStateCreateInfo = .{
@@ -675,7 +718,7 @@ const HelloTriangleApplication = struct {
             return error.FailedToBeginRecordingFramebuffer;
         }
 
-        const clearColor: c.VkClearValue              = .{ .color = .{ .float32 = .{ 0.0, 0.0, 0.0, 1.0 } } };
+        const clearColor:     c.VkClearValue          = .{ .color = .{ .float32 = .{ 0.0, 0.0, 0.0, 1.0 } } };
         const renderPassInfo: c.VkRenderPassBeginInfo = .{
             .sType           = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
             .renderPass      = self.renderPass,

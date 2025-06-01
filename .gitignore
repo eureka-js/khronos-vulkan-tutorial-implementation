@@ -1,4 +1,3 @@
 .zig-cache/*
-libs/*
 zig-out/*
 shaders/*.spv
