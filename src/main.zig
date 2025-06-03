@@ -44,9 +44,10 @@ fn DestroyDebugUtilsMessengerEXT(
 const QueueFamilyIndices = struct {
     graphicsFamily: ?u32,
     presentFamily:  ?u32,
+    transferFamily: ?u32,
 
     fn isComplete(self: QueueFamilyIndices) bool {
-        return self.graphicsFamily != null and self.presentFamily != null;
+        return self.graphicsFamily != null and self.presentFamily != null and self.transferFamily != null;
     }
 };
 
@@ -130,8 +131,9 @@ const HelloTriangleApplication = struct {
     physicalDevice: c.VkPhysicalDevice = @ptrCast(c.VK_NULL_HANDLE),
     device:         c.VkDevice         = undefined,
 
-    graphicsQueue: c.VkQueue = undefined,
-    presentQueue:  c.VkQueue = undefined,
+    graphicsQueue:  c.VkQueue = undefined,
+    presentQueue:   c.VkQueue = undefined,
+    transferQueue:  c.VkQueue = undefined,
 
     renderPass:       c.VkRenderPass     = undefined,
     pipelineLayout:   c.VkPipelineLayout = undefined,
@@ -139,19 +141,20 @@ const HelloTriangleApplication = struct {
 
     swapChainFramebuffers: []c.VkFramebuffer = undefined,
 
-    commandPool:    c.VkCommandPool                         = undefined,
-    commandBuffers: [MAX_FRAMES_IN_FLIGHT]c.VkCommandBuffer = undefined,
+    graphicsCommandPool:    c.VkCommandPool                         = undefined,
+    transferCommandPool:    c.VkCommandPool                         = undefined,
+    graphicsCommandBuffers: [MAX_FRAMES_IN_FLIGHT]c.VkCommandBuffer = undefined,
+    transferCommandBuffers: [MAX_FRAMES_IN_FLIGHT]c.VkCommandBuffer = undefined,
+
+    vertexBuffer:       c.VkBuffer       = undefined,
+    vertexBufferMemory: c.VkDeviceMemory = undefined,
 
     imageAvailableSemaphores: [MAX_FRAMES_IN_FLIGHT]c.VkSemaphore = undefined,
     renderFinishedSemaphores: [MAX_FRAMES_IN_FLIGHT]c.VkSemaphore = undefined,
     inFlightFences:           [MAX_FRAMES_IN_FLIGHT]c.VkFence     = undefined,
+    currentFrame:             u32                                 = 0,
 
     framebufferResized: bool = false,
-
-    currentFrame: u32 = 0,
-
-    vertexBuffer: c.VkBuffer = undefined,
-    vertexBufferMemory: c.VkDeviceMemory = undefined,
 
     allocator: *const std.mem.Allocator,
 
@@ -192,7 +195,7 @@ const HelloTriangleApplication = struct {
         try self.createRenderPass();
         try self.createGraphicsPipeline();
         try self.createFramebuffers();
-        try self.createCommandPool();
+        try self.createCommandPools();
         try self.createVertexBuffer();
         try self.createCommandBuffers();
         try self.createSyncObjects();
@@ -224,7 +227,8 @@ const HelloTriangleApplication = struct {
             c.vkDestroyFence(self.device, self.inFlightFences[i], null);
         }
 
-        c.vkDestroyCommandPool(self.device, self.commandPool, null);
+        c.vkDestroyCommandPool(self.device, self.graphicsCommandPool, null);
+        c.vkDestroyCommandPool(self.device, self.transferCommandPool, null);
 
         c.vkDestroyDevice(self.device, null);
 
@@ -370,6 +374,7 @@ const HelloTriangleApplication = struct {
         defer uniqueQueueFamilies.deinit();
         try uniqueQueueFamilies.put(indices.graphicsFamily.?, {});
         try uniqueQueueFamilies.put(indices.presentFamily.?, {});
+        try uniqueQueueFamilies.put(indices.transferFamily.?, {});
 
         const queuePriority: f32 = 1.0;
         var it                   = uniqueQueueFamilies.iterator();
@@ -399,6 +404,7 @@ const HelloTriangleApplication = struct {
 
         c.vkGetDeviceQueue(self.device, indices.graphicsFamily.?, 0, &self.graphicsQueue);
         c.vkGetDeviceQueue(self.device, indices.presentFamily.?, 0, &self.presentQueue);
+        c.vkGetDeviceQueue(self.device, indices.transferFamily.?, 0, &self.transferQueue);
     }
 
     fn createSwapChain(self: *HelloTriangleApplication) !void {
@@ -431,9 +437,9 @@ const HelloTriangleApplication = struct {
         if (indices.graphicsFamily == indices.presentFamily) {
             createInfo.imageSharingMode = c.VK_SHARING_MODE_EXCLUSIVE;
         } else {
-            createInfo.imageSharingMode      = c.VK_SHARING_MODE_CONCURRENT;
+            createInfo.imageSharingMode = c.VK_SHARING_MODE_CONCURRENT;
             createInfo.queueFamilyIndexCount = 2;
-            const queueFamilyIndices         = [_]u32{ indices.graphicsFamily.?, indices.presentFamily.? };
+            const queueFamilyIndices         = [_]u32{ indices.graphicsFamily.?, indices.presentFamily.?};
             createInfo.pQueueFamilyIndices   = &queueFamilyIndices;
         }
 
@@ -667,66 +673,136 @@ const HelloTriangleApplication = struct {
         }
     }
 
-    fn createCommandPool(self: *HelloTriangleApplication) !void {
+    fn createCommandPools(self: *HelloTriangleApplication) !void {
         const queueFamilyIndices: QueueFamilyIndices = try findQueueFamilies(self.physicalDevice, self.surface, self.allocator);
 
-        const poolInfo: c.VkCommandPoolCreateInfo = .{
+        const graphicsPoolInfo: c.VkCommandPoolCreateInfo = .{
             .sType            = c.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
             .flags            = c.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
             .queueFamilyIndex = queueFamilyIndices.graphicsFamily.?,
         };
 
-        if (c.vkCreateCommandPool(self.device, &poolInfo, null, &self.commandPool) != c.VK_SUCCESS) {
-            return error.FailedToCreateCommandPool;
+        if (c.vkCreateCommandPool(self.device, &graphicsPoolInfo, null, &self.graphicsCommandPool) != c.VK_SUCCESS) {
+            return error.FailedToCreateGraphicsCommandPool;
+        }
+
+        const transferPoolInfo: c.VkCommandPoolCreateInfo = .{
+            .sType            = c.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+            .flags            = c.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+            .queueFamilyIndex = queueFamilyIndices.transferFamily.?,
+        };
+
+        if (c.vkCreateCommandPool(self.device, &transferPoolInfo, null, &self.transferCommandPool) != c.VK_SUCCESS) {
+            return error.FailedToCreateTransferCommandPool;
         }
     }
 
     fn createVertexBuffer(self: *HelloTriangleApplication) !void {
-        const bufferInfo: c.VkBufferCreateInfo = .{
-            .sType       = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-            .size        = @sizeOf(@TypeOf(vertices[0])) * vertices.len,
-            .usage       = c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-            .sharingMode = c.VK_SHARING_MODE_EXCLUSIVE,
-        };
+        const bufferSize: c.VkDeviceSize = @sizeOf(@TypeOf(vertices[0])) * vertices.len;
 
-        if (c.vkCreateBuffer(self.device, &bufferInfo, null, &self.vertexBuffer) != c.VK_SUCCESS) {
+        var stagingBuffer:       c.VkBuffer       = undefined;
+        var stagingBufferMemory: c.VkDeviceMemory = undefined;
+        try self.createBuffer(
+            bufferSize,
+            c.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &stagingBuffer,
+            &stagingBufferMemory,
+        );
+
+        var data: ?[]Vertex = undefined;
+        _ = c.vkMapMemory(self.device, stagingBufferMemory, 0, bufferSize, 0, @ptrCast(&data));
+        @memcpy(data.?.ptr, &vertices);
+        c.vkUnmapMemory(self.device, stagingBufferMemory);
+
+        try self.createBuffer(
+            bufferSize,
+            c.VK_BUFFER_USAGE_TRANSFER_DST_BIT | c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            &self.vertexBuffer,
+            &self.vertexBufferMemory,
+        );
+
+        self.copyBuffer(stagingBuffer, self.vertexBuffer, bufferSize);
+
+        c.vkDestroyBuffer(self.device, stagingBuffer, null);
+        c.vkFreeMemory(self.device, stagingBufferMemory, null);
+    }
+
+    fn createBuffer(
+        self:         *HelloTriangleApplication,
+        size:         c.VkDeviceSize,
+        usage:        c.VkBufferUsageFlags,
+        properties:   c.VkMemoryPropertyFlags,
+        buffer:       *c.VkBuffer,
+        bufferMemory: *c.VkDeviceMemory,
+    ) !void {
+        const indices = try findQueueFamilies(self.physicalDevice, self.surface, self.allocator);
+        const bufferInfo: c.VkBufferCreateInfo = .{
+            .sType                 = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .size                  = size,
+            .usage                 = usage,
+            .sharingMode           = c.VK_SHARING_MODE_CONCURRENT,
+            .queueFamilyIndexCount = 2,
+            .pQueueFamilyIndices   = &[_]u32{indices.graphicsFamily.?, indices.transferFamily.?},
+        };
+        if (c.vkCreateBuffer(self.device, &bufferInfo, null, buffer) != c.VK_SUCCESS) {
             return error.FailedToCreateVertexBuffer;
         }
 
         var memRequirements: c.VkMemoryRequirements = undefined;
-        c.vkGetBufferMemoryRequirements(self.device, self.vertexBuffer, &memRequirements);
+        c.vkGetBufferMemoryRequirements(self.device, buffer.*, &memRequirements);
+
         const allocInfo: c.VkMemoryAllocateInfo = .{
             .sType           = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
             .allocationSize  = memRequirements.size,
-            .memoryTypeIndex = try self.findMemoryType(
-                memRequirements.memoryTypeBits,
-                c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
-            ),
+            .memoryTypeIndex = try self.findMemoryType(memRequirements.memoryTypeBits, properties),
         };
-
-        if (c.vkAllocateMemory(self.device, &allocInfo, null, &self.vertexBufferMemory) != c.VK_SUCCESS) {
+        // NOTE: It's not good to call vkAllocateMemory for each individual buffer in production code
+        // because simultaneous memory allocations are limited by the maxMemoryAllocationCount physical device limit. (03-06-2025)
+        if (c.vkAllocateMemory(self.device, &allocInfo, null, bufferMemory) != c.VK_SUCCESS) {
             return error.FailedToAllocateVertexBufferMemory;
         }
 
-        _ = c.vkBindBufferMemory(self.device, self.vertexBuffer, self.vertexBufferMemory, 0);
-
-        var data: ?[]Vertex = undefined;
-        _ = c.vkMapMemory(self.device, self.vertexBufferMemory, 0, bufferInfo.size, 0, @ptrCast(&data));
-        @memcpy(data.?.ptr, &vertices);
-        c.vkUnmapMemory(self.device, self.vertexBufferMemory);
+        _ = c.vkBindBufferMemory(self.device, buffer.*, bufferMemory.*, 0);
     }
 
-    fn createCommandBuffers(self: *HelloTriangleApplication) !void {
+    fn copyBuffer(self: *HelloTriangleApplication, srcBuffer: c.VkBuffer, dstBuffer: c.VkBuffer, size: c.VkDeviceSize) void {
         const allocInfo: c.VkCommandBufferAllocateInfo = .{
             .sType              = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-            .commandPool        = self.commandPool,
             .level              = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-            .commandBufferCount = @intCast(self.commandBuffers.len),
-        };
+            .commandPool        = self.transferCommandPool,
+            .commandBufferCount = 1,
 
-        if (c.vkAllocateCommandBuffers(self.device, &allocInfo, &self.commandBuffers) != c.VK_SUCCESS) {
-            return error.FailedToCreateCommandBuffers;
-        }
+        };
+        var commandBuffer: c.VkCommandBuffer = undefined;
+        _ = c.vkAllocateCommandBuffers(self.device, &allocInfo, &commandBuffer);
+
+        const beginInfo: c.VkCommandBufferBeginInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .flags = c.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        };
+        _ = c.vkBeginCommandBuffer(commandBuffer, &beginInfo);
+
+        var copyRegion: c.VkBufferCopy = .{
+            .srcOffset = 0, // Optional
+            .dstOffset = 0, // Optional
+            .size      = size,
+        };
+        c.vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
+
+        _ = c.vkEndCommandBuffer(commandBuffer);
+
+        const submitInfo: c.VkSubmitInfo = .{
+            .sType              = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
+            .commandBufferCount = 1,
+            .pCommandBuffers    = &commandBuffer,
+        };
+        _ = c.vkQueueSubmit(self.transferQueue, 1, &submitInfo, @ptrCast(c.VK_NULL_HANDLE));
+
+        _ = c.vkQueueWaitIdle(self.transferQueue);
+
+        c.vkFreeCommandBuffers(self.device, self.transferCommandPool, 1, &commandBuffer);
     }
 
     fn findMemoryType(self: *HelloTriangleApplication, typeFilter: u32, properties: c.VkMemoryPropertyFlags) !u32 {
@@ -739,6 +815,30 @@ const HelloTriangleApplication = struct {
             }
         }
         return error.FailedToFindSuitableMemoryType;
+    }
+
+    fn createCommandBuffers(self: *HelloTriangleApplication) !void {
+        const allocInfoGraphics: c.VkCommandBufferAllocateInfo = .{
+            .sType              = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .commandPool        = self.graphicsCommandPool,
+            .level              = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = @intCast(self.graphicsCommandBuffers.len),
+        };
+
+        if (c.vkAllocateCommandBuffers(self.device, &allocInfoGraphics, &self.graphicsCommandBuffers) != c.VK_SUCCESS) {
+            return error.FailedToCreateGraphicsCommandBuffers;
+        }
+
+        const allocInfoTransfer: c.VkCommandBufferAllocateInfo = .{
+            .sType              = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .commandPool        = self.transferCommandPool,
+            .level              = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = @intCast(self.transferCommandBuffers.len),
+        };
+
+        if (c.vkAllocateCommandBuffers(self.device, &allocInfoTransfer, &self.transferCommandBuffers) != c.VK_SUCCESS) {
+            return error.FailedToCreateTransferCommandBuffers;
+        }
     }
 
     fn createSyncObjects(self: *HelloTriangleApplication) !void {
@@ -761,14 +861,14 @@ const HelloTriangleApplication = struct {
         }
     }
 
-    fn recordCommandBuffer(self: *HelloTriangleApplication, commandBuffers: c.VkCommandBuffer, imageIndex: u32) !void {
+    fn recordCommandBuffer(self: *HelloTriangleApplication, commandBuffer: c.VkCommandBuffer, imageIndex: u32) !void {
         const beginInfo: c.VkCommandBufferBeginInfo = .{
             .sType            = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
             .flags            = 0,    // Optional
             .pInheritanceInfo = null, // Optional
         };
 
-        if (c.vkBeginCommandBuffer(commandBuffers, &beginInfo) != c.VK_SUCCESS) {
+        if (c.vkBeginCommandBuffer(commandBuffer, &beginInfo) != c.VK_SUCCESS) {
             return error.FailedToBeginRecordingFramebuffer;
         }
 
@@ -785,9 +885,9 @@ const HelloTriangleApplication = struct {
             .pClearValues    = &clearColor,
         };
 
-        c.vkCmdBeginRenderPass(commandBuffers, &renderPassInfo, c.VK_SUBPASS_CONTENTS_INLINE);
+        c.vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, c.VK_SUBPASS_CONTENTS_INLINE);
 
-        c.vkCmdBindPipeline(commandBuffers, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphicsPipeline);
+        c.vkCmdBindPipeline(commandBuffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphicsPipeline);
         const viewPort: c.VkViewport = .{
             .x        = 0.0,
             .y        = 0.0,
@@ -796,23 +896,23 @@ const HelloTriangleApplication = struct {
             .minDepth = 0.0,
             .maxDepth = 1.0,
         };
-        c.vkCmdSetViewport(commandBuffers, 0, 1, &viewPort);
+        c.vkCmdSetViewport(commandBuffer, 0, 1, &viewPort);
 
         const scissor: c.VkRect2D = .{
             .offset = .{ .x = 0, .y = 0 },
             .extent = self.swapChainExtent,
         };
-        c.vkCmdSetScissor(commandBuffers, 0, 1, &scissor);
+        c.vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
         const vertexBuffers: []const c.VkBuffer     = &.{self.vertexBuffer};
         const offsets:       []const c.VkDeviceSize = &.{0};
-        c.vkCmdBindVertexBuffers(commandBuffers, 0, 1, vertexBuffers.ptr, offsets.ptr);
+        c.vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers.ptr, offsets.ptr);
 
-        c.vkCmdDraw(commandBuffers, vertices.len, 1, 0, 0);
+        c.vkCmdDraw(commandBuffer, vertices.len, 1, 0, 0);
 
-        c.vkCmdEndRenderPass(commandBuffers);
+        c.vkCmdEndRenderPass(commandBuffer);
 
-        if (c.vkEndCommandBuffer(commandBuffers) != c.VK_SUCCESS) {
+        if (c.vkEndCommandBuffer(commandBuffer) != c.VK_SUCCESS) {
             return error.FailedToRecordCommandBuffer;
         }
     }
@@ -834,8 +934,8 @@ const HelloTriangleApplication = struct {
 
         _ = c.vkResetFences(self.device, 1, &self.inFlightFences[self.currentFrame]);
 
-        _ = c.vkResetCommandBuffer(self.commandBuffers[self.currentFrame], 0);
-        try self.recordCommandBuffer(self.commandBuffers[self.currentFrame], imageIndex);
+        _ = c.vkResetCommandBuffer(self.graphicsCommandBuffers[self.currentFrame], 0);
+        try self.recordCommandBuffer(self.graphicsCommandBuffers[self.currentFrame], imageIndex);
 
         const waitSemaphores:   []const c.VkSemaphore          = &.{self.imageAvailableSemaphores[self.currentFrame]};
         const waitStages:       []const c.VkPipelineStageFlags = &.{c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
@@ -846,7 +946,7 @@ const HelloTriangleApplication = struct {
             .pWaitSemaphores      = waitSemaphores.ptr,
             .pWaitDstStageMask    = waitStages.ptr,
             .commandBufferCount   = 1,
-            .pCommandBuffers      = &self.commandBuffers[self.currentFrame],
+            .pCommandBuffers      = &self.graphicsCommandBuffers[self.currentFrame],
             .signalSemaphoreCount = 1,
             .pSignalSemaphores    = signalSemaphores.ptr,
         };
@@ -973,7 +1073,6 @@ const HelloTriangleApplication = struct {
         const indices: QueueFamilyIndices = try findQueueFamilies(device, surface, allocator);
 
         const extensionsSupported: bool = try checkDeviceExtensionSupport(device, allocator);
-
         if (!extensionsSupported) {
             return false;
         }
@@ -1008,7 +1107,11 @@ const HelloTriangleApplication = struct {
     }
 
     fn findQueueFamilies(device: c.VkPhysicalDevice, surface: c.VkSurfaceKHR, allocator: *const std.mem.Allocator) !QueueFamilyIndices {
-        var indices: QueueFamilyIndices = .{ .graphicsFamily = null, .presentFamily = null };
+        var indices: QueueFamilyIndices = .{
+            .graphicsFamily = null,
+            .presentFamily  = null,
+            .transferFamily = null,
+        };
 
         var queueFamilyCount: u32 = 0;
         c.vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, null);
@@ -1023,6 +1126,8 @@ const HelloTriangleApplication = struct {
 
             if ((queueFamily.queueFlags & c.VK_QUEUE_GRAPHICS_BIT) != 0) {
                 indices.graphicsFamily = @intCast(i);
+            } else if ((queueFamily.queueFlags & c.VK_QUEUE_TRANSFER_BIT) != 0) {
+                indices.transferFamily = @intCast(i);
             }
 
             var doesSupportPresent: c.VkBool32 = 0;
