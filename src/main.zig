@@ -1,4 +1,5 @@
 const c = @cImport({
+
     @cDefine("GLFW_INCLUDE_VULKAN", "");
     @cInclude("GLFW/glfw3.h");
     @cInclude("cglm/cglm.h");
@@ -109,10 +110,15 @@ const Vertex = struct {
     }
 };
 
-const vertices: [3]Vertex = .{
-    .{.pos = .{ 0.0, -0.5}, .color = .{1.0, 0.0, 0.0}},
-    .{.pos = .{ 0.5,  0.5}, .color = .{0.0, 1.0, 0.0}},
-    .{.pos = .{-0.5,  0.5}, .color = .{0.0, 0.0, 1.0}},
+const vertices: [4]Vertex = .{
+    .{.pos = .{-0.5, -0.5}, .color = .{1.0, 0.0, 0.0}},
+    .{.pos = .{ 0.5, -0.5}, .color = .{0.0, 1.0, 0.0}},
+    .{.pos = .{ 0.5,  0.5}, .color = .{0.0, 0.0, 1.0}},
+    .{.pos = .{-0.5,  0.5}, .color = .{1.0, 1.0, 1.0}},
+};
+
+const indices: [6]u16 = .{
+    0, 1, 2, 2, 3, 0
 };
 
 const HelloTriangleApplication = struct {
@@ -147,7 +153,9 @@ const HelloTriangleApplication = struct {
     transferCommandBuffers: [MAX_FRAMES_IN_FLIGHT]c.VkCommandBuffer = undefined,
 
     vertexBuffer:       c.VkBuffer       = undefined,
+    indexBuffer:        c.VkBuffer       = undefined,
     vertexBufferMemory: c.VkDeviceMemory = undefined,
+    indexBufferMemory:  c.VkDeviceMemory = undefined,
 
     imageAvailableSemaphores: [MAX_FRAMES_IN_FLIGHT]c.VkSemaphore = undefined,
     renderFinishedSemaphores: [MAX_FRAMES_IN_FLIGHT]c.VkSemaphore = undefined,
@@ -197,6 +205,7 @@ const HelloTriangleApplication = struct {
         try self.createFramebuffers();
         try self.createCommandPools();
         try self.createVertexBuffer();
+        try self.createIndexBuffer();
         try self.createCommandBuffers();
         try self.createSyncObjects();
     }
@@ -215,6 +224,9 @@ const HelloTriangleApplication = struct {
 
         c.vkDestroyBuffer(self.device, self.vertexBuffer, null);
         c.vkFreeMemory(self.device, self.vertexBufferMemory, null);
+
+        c.vkDestroyBuffer(self.device, self.indexBuffer, null);
+        c.vkFreeMemory(self.device, self.indexBufferMemory, null);
 
         c.vkDestroyPipeline(self.device, self.graphicsPipeline, null);
         c.vkDestroyPipelineLayout(self.device, self.pipelineLayout, null);
@@ -366,15 +378,15 @@ const HelloTriangleApplication = struct {
     }
 
     fn createLogicalDevice(self: *HelloTriangleApplication) !void {
-        const indices: QueueFamilyIndices = try findQueueFamilies(self.physicalDevice, self.surface, self.allocator);
+        const familyIndices: QueueFamilyIndices = try findQueueFamilies(self.physicalDevice, self.surface, self.allocator);
 
         var queueCreateInfos    = std.ArrayList(c.VkDeviceQueueCreateInfo).init(self.allocator.*);
         defer queueCreateInfos.deinit();
         var uniqueQueueFamilies = std.AutoHashMap(u32, void).init(self.allocator.*);
         defer uniqueQueueFamilies.deinit();
-        try uniqueQueueFamilies.put(indices.graphicsFamily.?, {});
-        try uniqueQueueFamilies.put(indices.presentFamily.?, {});
-        try uniqueQueueFamilies.put(indices.transferFamily.?, {});
+        try uniqueQueueFamilies.put(familyIndices.graphicsFamily.?, {});
+        try uniqueQueueFamilies.put(familyIndices.presentFamily.?, {});
+        try uniqueQueueFamilies.put(familyIndices.transferFamily.?, {});
 
         const queuePriority: f32 = 1.0;
         var it                   = uniqueQueueFamilies.iterator();
@@ -402,9 +414,9 @@ const HelloTriangleApplication = struct {
             return error.FailedToCreateLogicalDevice;
         }
 
-        c.vkGetDeviceQueue(self.device, indices.graphicsFamily.?, 0, &self.graphicsQueue);
-        c.vkGetDeviceQueue(self.device, indices.presentFamily.?, 0, &self.presentQueue);
-        c.vkGetDeviceQueue(self.device, indices.transferFamily.?, 0, &self.transferQueue);
+        c.vkGetDeviceQueue(self.device, familyIndices.graphicsFamily.?, 0, &self.graphicsQueue);
+        c.vkGetDeviceQueue(self.device, familyIndices.presentFamily.?, 0, &self.presentQueue);
+        c.vkGetDeviceQueue(self.device, familyIndices.transferFamily.?, 0, &self.transferQueue);
     }
 
     fn createSwapChain(self: *HelloTriangleApplication) !void {
@@ -433,13 +445,13 @@ const HelloTriangleApplication = struct {
         createInfo.imageArrayLayers = 1;
         createInfo.imageUsage       = c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
-        const indices: QueueFamilyIndices = try findQueueFamilies(self.physicalDevice, self.surface, self.allocator);
-        if (indices.graphicsFamily == indices.presentFamily) {
+        const familyIndices: QueueFamilyIndices = try findQueueFamilies(self.physicalDevice, self.surface, self.allocator);
+        if (familyIndices.graphicsFamily == familyIndices.presentFamily) {
             createInfo.imageSharingMode = c.VK_SHARING_MODE_EXCLUSIVE;
         } else {
             createInfo.imageSharingMode = c.VK_SHARING_MODE_CONCURRENT;
             createInfo.queueFamilyIndexCount = 2;
-            const queueFamilyIndices         = [_]u32{ indices.graphicsFamily.?, indices.presentFamily.?};
+            const queueFamilyIndices         = [_]u32{ familyIndices.graphicsFamily.?, familyIndices.presentFamily.?};
             createInfo.pQueueFamilyIndices   = &queueFamilyIndices;
         }
 
@@ -729,6 +741,38 @@ const HelloTriangleApplication = struct {
         c.vkFreeMemory(self.device, stagingBufferMemory, null);
     }
 
+    fn createIndexBuffer(self: *HelloTriangleApplication) !void {
+        const bufferSize: c.VkDeviceSize = @sizeOf(@TypeOf(indices[0])) * indices.len;
+
+        var stagingBuffer:       c.VkBuffer       = undefined;
+        var stagingBufferMemory: c.VkDeviceMemory = undefined;
+        try self.createBuffer(
+            bufferSize,
+            c.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &stagingBuffer,
+            &stagingBufferMemory,
+        );
+
+        var data: ?[]u16 = undefined;
+        _ = c.vkMapMemory(self.device, stagingBufferMemory, 0, bufferSize, 0, @ptrCast(&data));
+        @memcpy(data.?.ptr, &indices);
+        c.vkUnmapMemory(self.device, stagingBufferMemory);
+
+        try self.createBuffer(
+            bufferSize,
+            c.VK_BUFFER_USAGE_TRANSFER_DST_BIT | c.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+            c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            &self.indexBuffer,
+            &self.indexBufferMemory,
+        );
+
+        self.copyBuffer(stagingBuffer, self.indexBuffer, bufferSize);
+
+        c.vkDestroyBuffer(self.device, stagingBuffer, null);
+        c.vkFreeMemory(self.device, stagingBufferMemory, null);
+    }
+
     fn createBuffer(
         self:         *HelloTriangleApplication,
         size:         c.VkDeviceSize,
@@ -737,14 +781,14 @@ const HelloTriangleApplication = struct {
         buffer:       *c.VkBuffer,
         bufferMemory: *c.VkDeviceMemory,
     ) !void {
-        const indices = try findQueueFamilies(self.physicalDevice, self.surface, self.allocator);
+        const familyIndices = try findQueueFamilies(self.physicalDevice, self.surface, self.allocator);
         const bufferInfo: c.VkBufferCreateInfo = .{
             .sType                 = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
             .size                  = size,
             .usage                 = usage,
             .sharingMode           = c.VK_SHARING_MODE_CONCURRENT,
             .queueFamilyIndexCount = 2,
-            .pQueueFamilyIndices   = &[_]u32{indices.graphicsFamily.?, indices.transferFamily.?},
+            .pQueueFamilyIndices   = &[_]u32{familyIndices.graphicsFamily.?, familyIndices.transferFamily.?},
         };
         if (c.vkCreateBuffer(self.device, &bufferInfo, null, buffer) != c.VK_SUCCESS) {
             return error.FailedToCreateVertexBuffer;
@@ -759,7 +803,7 @@ const HelloTriangleApplication = struct {
             .memoryTypeIndex = try self.findMemoryType(memRequirements.memoryTypeBits, properties),
         };
         // NOTE: It's not good to call vkAllocateMemory for each individual buffer in production code
-        // because simultaneous memory allocations are limited by the maxMemoryAllocationCount physical device limit. (03-06-2025)
+        // because simultaneous memory allocations are limited by the maxMemoryAllocationCount physical device limit. (2025-03-06)
         if (c.vkAllocateMemory(self.device, &allocInfo, null, bufferMemory) != c.VK_SUCCESS) {
             return error.FailedToAllocateVertexBufferMemory;
         }
@@ -773,7 +817,6 @@ const HelloTriangleApplication = struct {
             .level              = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
             .commandPool        = self.transferCommandPool,
             .commandBufferCount = 1,
-
         };
         var commandBuffer: c.VkCommandBuffer = undefined;
         _ = c.vkAllocateCommandBuffers(self.device, &allocInfo, &commandBuffer);
@@ -908,7 +951,10 @@ const HelloTriangleApplication = struct {
         const offsets:       []const c.VkDeviceSize = &.{0};
         c.vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers.ptr, offsets.ptr);
 
-        c.vkCmdDraw(commandBuffer, vertices.len, 1, 0, 0);
+        c.vkCmdBindIndexBuffer(commandBuffer, self.indexBuffer, 0, c.VK_INDEX_TYPE_UINT16);
+
+        //c.vkCmdDraw(commandBuffer, vertices.len, 1, 0, 0);
+        c.vkCmdDrawIndexed(commandBuffer, indices.len, 1, 0, 0, 0);
 
         c.vkCmdEndRenderPass(commandBuffer);
 
@@ -1070,7 +1116,7 @@ const HelloTriangleApplication = struct {
         surface:   c.VkSurfaceKHR,
         allocator: *const std.mem.Allocator,
     ) !bool {
-        const indices: QueueFamilyIndices = try findQueueFamilies(device, surface, allocator);
+        const familyIndices: QueueFamilyIndices = try findQueueFamilies(device, surface, allocator);
 
         const extensionsSupported: bool = try checkDeviceExtensionSupport(device, allocator);
         if (!extensionsSupported) {
@@ -1081,7 +1127,7 @@ const HelloTriangleApplication = struct {
         defer swapChainSupport.deinit(allocator);
         const swapChainAdequate: bool = swapChainSupport.formats.items.len > 0 and swapChainSupport.presentModes.items.len > 0;
 
-        return indices.isComplete() and swapChainAdequate;
+        return familyIndices.isComplete() and swapChainAdequate;
     }
 
     fn checkDeviceExtensionSupport(device: c.VkPhysicalDevice, allocator: *const std.mem.Allocator) !bool {
@@ -1107,7 +1153,7 @@ const HelloTriangleApplication = struct {
     }
 
     fn findQueueFamilies(device: c.VkPhysicalDevice, surface: c.VkSurfaceKHR, allocator: *const std.mem.Allocator) !QueueFamilyIndices {
-        var indices: QueueFamilyIndices = .{
+        var familyIndices: QueueFamilyIndices = .{
             .graphicsFamily = null,
             .presentFamily  = null,
             .transferFamily = null,
@@ -1123,25 +1169,27 @@ const HelloTriangleApplication = struct {
             // would yield improved performance compared to this loop implementation
             // (even though it can happen in this implementation that the same queue family
             // gets selected for both). (2025-04-19)
+            // IMPORTANT: There is no fallback for when the transfer queue family is not found
+            // because the tutorial task requires a strictly transfer-only queue family (2025-06-04)
 
             if ((queueFamily.queueFlags & c.VK_QUEUE_GRAPHICS_BIT) != 0) {
-                indices.graphicsFamily = @intCast(i);
+                familyIndices.graphicsFamily = @intCast(i);
             } else if ((queueFamily.queueFlags & c.VK_QUEUE_TRANSFER_BIT) != 0) {
-                indices.transferFamily = @intCast(i);
+                familyIndices.transferFamily = @intCast(i);
             }
 
             var doesSupportPresent: c.VkBool32 = 0;
             _ = c.vkGetPhysicalDeviceSurfaceSupportKHR(device, @intCast(i), surface, &doesSupportPresent);
             if (doesSupportPresent != 0) {
-                indices.presentFamily = @intCast(i);
+                familyIndices.presentFamily = @intCast(i);
             }
 
-            if (indices.isComplete()) {
+            if (familyIndices.isComplete()) {
                 break;
             }
         }
 
-        return indices;
+        return familyIndices;
     }
 
     fn getRequiredExtensions(allocator: *const std.mem.Allocator) !std.ArrayList([*c]const u8) {

@@ -1,5 +1,7 @@
 // High level mental map
 
+...
+
 MAX_FRAMES_IN_FLIGHT: u32 = 2
 
 enableValidationLayers = if debug then true else false
@@ -33,6 +35,11 @@ HelloTriangleApplication
 
     commandPool:    VkCommandPool
     commandBuffers: [MAX_FRAMES_IN_FLIGHT]VkCommandBuffer
+
+    vertexBuffer:       VkBuffer
+    indexBuffer:        VkBuffer
+    vertexBufferMemory: VkDeviceMemory
+    indexBufferMemory:  VkDeviceMemory
 
     imageAvailableSemaphores: [MAX_FRAMES_IN_FLIGHT]VkSemaphore
     renderFinishedSemaphores: [MAX_FRAMES_IN_FLIGHT]VkSemaphore
@@ -74,8 +81,6 @@ HelloTriangleApplication
             vkEnumeratePhysicalDevices
             isDeviceSuitable
                 findQueueFamilies
-                    vkGetPhysicalDeviceQueueFamilyProperties
-                    vkGetPhysicalDeviceSurfaceSupportKHR
                 checkDeviceExtensionSupport
                     vkEnumerateDeviceExtensionProperties
                 querySwapChainSupport
@@ -85,11 +90,10 @@ HelloTriangleApplication
 
         createLogicalDevice
             findQueueFamilies
-                vkGetPhysicalDeviceQueueFamilyProperties
-                vkGetPhysicalDeviceSurfaceSupportKHR
             vkCreateDevice
-            vkGetDeviceQueue
-            vkGetDeviceQueue
+            vkGetDeviceQueue graphicsQueue
+            vkGetDeviceQueue presentQueue
+            vkGetDeviceQueue transferQueue
 
         createSwapChain
             querySwapChainSupport
@@ -99,8 +103,6 @@ HelloTriangleApplication
             chooseSwapExtent
                 glfwGetFramebufferSize
             findQueueFamilies
-                vkGetPhysicalDeviceQueueFamilyProperties
-                vkGetPhysicalDeviceSurfaceSupportKHR
             vkCreateSwapchainKHR
             vkGetSwapchainImagesKHR
 
@@ -127,14 +129,32 @@ HelloTriangleApplication
         createCommandPool
             vkCreateCommandPool
 
+        createVertexBuffer
+            createBuffer stagingBuffer stagingBufferMemory
+            vkMapMemory stagingBufferMemory
+            vkUnmapMemory stagingBufferMemory
+            createBuffer vertexBuffer vertexBufferMemory
+            copyBuffer src=stagingBuffer dst=vertexBuffer
+            vkDestroyBuffer stagingBuffer
+            vkFreeMemory stagingBufferMemory
+
+        createIndexBuffer
+            createBuffer stagingBuffer stagingBufferMemory
+            vkMapMemory stagingBufferMemory
+            vkUnmapMemory stagingBufferMemory
+            createBuffer indexBuffer indexBufferMemory
+            copyBuffer src=stagingBuffer dst=indexBuffer
+            vkDestroyBuffer stagingBuffer
+            vkFreeMemory stagingBufferMemory
+
         createCommandBuffers
             vkAllocateCommandBuffers
 
         createSyncObjects
             for i = 0; while i < MAX_FRAMES_IN_FLIGHT
-                vkCreateSemaphores imageAvailableSemaphores[i]
-                vkCreateSemaphores renderFinishedSemaphores[i]
-                vkCreateFences inFlightFences[i]
+                vkCreateSemaphore imageAvailableSemaphores[i]
+                vkCreateSemaphore renderFinishedSemaphores[i]
+                vkCreateFence inFlightFences[i]
 
     drawFrame
         vkWaitForFences inFlightFences[currentFrame]
@@ -153,9 +173,12 @@ HelloTriangleApplication
             vkBeginCommandBuffer
             vkCmdBeginRenderPass
             vkCmdBindPipeline
+            vkCmdBindVertexBuffers
+            vkCmdBindIndexBuffer
             vkCmdSetViewport
             vkCmdSetScissor
-            vkCmdDraw
+            //vkCmdDraw // only if drawing non-indexed
+            vkCmdDrawIndexed
             vkCmdEndRenderPass
             vkEndCommandBuffer
 
@@ -177,6 +200,12 @@ HelloTriangleApplication
 
     cleanup
         cleanupSwapChain
+
+        vkDestroyBuffer indexBuffer
+        vkFreeMemory indexBufferMemory
+
+        vkDestroyBuffer vertexBuffer
+        vkFreeMemory vertexBufferMemory
 
         vkDestroyPipeline
         vkDestroyPipelineLayout
@@ -225,3 +254,26 @@ HelloTriangleApplication
         createSwapChain
         createImageViews
         createFramebuffers
+
+    createBuffer
+        findQueueFamilies
+        vkCreateBuffer
+        vkGetBufferMemoryRequirements
+        vkAllocateMemory
+        vkBindBufferMemory
+
+    copyBuffer // submiting to transfer queue
+        vkAllocateCommandBuffers
+        vkBeginCommandBuffer
+        vkCmdCopyBuffer
+        vkEndCommandBuffer
+        vkQueueSubmit
+        vkQueueWaitIdle
+        vkFreeCommandBuffers
+
+    findQueueFamilies
+        vkGetPhysicalDeviceQueueFamilyProperties
+        vkGetPhysicalDeviceSurfaceSupportKHR
+
+    findMemoryType
+        vkGetPhysicalDeviceMemoryProperties
