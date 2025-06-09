@@ -114,13 +114,13 @@ glm_mul(mat4 m1, mat4 m2, mat4 dest) {
 CGLM_INLINE
 void
 glm_mul_rot(mat4 m1, mat4 m2, mat4 dest) {
-#if defined(__wasm__) && defined(__wasm_simd128__)
-  glm_mul_rot_wasm(m1, m2, dest);
-#elif defined( __SSE__ ) || defined( __SSE2__ )
-  glm_mul_rot_sse2(m1, m2, dest);
-#elif defined(CGLM_NEON_FP)
-  glm_mul_rot_neon(m1, m2, dest);
-#else
+//#if defined(__wasm__) && defined(__wasm_simd128__)
+//  glm_mul_rot_wasm(m1, m2, dest);
+//#elif defined( __SSE__ ) || defined( __SSE2__ )
+//  glm_mul_rot_sse2(m1, m2, dest);
+//#elif defined(CGLM_NEON_FP)
+//  glm_mul_rot_neon(m1, m2, dest);
+//#else
   float a00 = m1[0][0], a01 = m1[0][1], a02 = m1[0][2], a03 = m1[0][3],
         a10 = m1[1][0], a11 = m1[1][1], a12 = m1[1][2], a13 = m1[1][3],
         a20 = m1[2][0], a21 = m1[2][1], a22 = m1[2][2], a23 = m1[2][3],
@@ -149,7 +149,7 @@ glm_mul_rot(mat4 m1, mat4 m2, mat4 dest) {
   dest[3][1] = a31;
   dest[3][2] = a32;
   dest[3][3] = a33;
-#endif
+//#endif
 }
 
 /*!

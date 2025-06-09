@@ -8,7 +8,12 @@ enableValidationLayers = if debug then true else false
 
 ...
 
-HelloTriangleApplication
+struct UniformBufferObject
+    model: mat4 aligned(16)
+    vier:  mat4 aligned(16)
+    proj:  mat4 aligned(16)
+
+struct HelloTriangleApplication
     window:  GLFWwindow
     surface: VkSurfaceKHR
 
@@ -26,10 +31,12 @@ HelloTriangleApplication
 
     graphicsQueue: VkQueue
     presentQueue:  VkQueue
+    transferQueue: VkQueue
 
-    renderPass:       VkRenderPass
-    pipelineLayout:   VkPipelineLayout
-    graphicsPipeline: VkPipeline
+    renderPass:          VkRenderPass
+    descriptorSetLayout: VkDescriptorSetLayout
+    pipelineLayout:      VkPipelineLayout
+    graphicsPipeline:    VkPipeline
 
     swapChainFramebuffers: []VkFrameBuffer
 
@@ -40,6 +47,13 @@ HelloTriangleApplication
     indexBuffer:        VkBuffer
     vertexBufferMemory: VkDeviceMemory
     indexBufferMemory:  VkDeviceMemory
+
+    uniformBuffers:       [MAX_FRAMES_IN_FLIGHT]VkBuffer
+    uniformBuffersMemory: [MAX_FRAMES_IN_FLIGHT]VkDeviceMemory
+    uniformBuffersMapped: [MAX_FRAMES_IN_FLIGHT]*UniformBufferObject
+
+    descriptorPool: VkDescriptorPool
+    descriptorSets: [MAX_FRAMES_IN_FLIGHT]VkDescriptorSet
 
     imageAvailableSemaphores: [MAX_FRAMES_IN_FLIGHT]VkSemaphore
     renderFinishedSemaphores: [MAX_FRAMES_IN_FLIGHT]VkSemaphore
@@ -112,6 +126,9 @@ HelloTriangleApplication
         createRenderPass
             vkCreateRenderPass
 
+        createDescriptorSetLayout
+            vkCreateDescriptorSetLayout
+
         createGraphicsPipeline
             createShaderModule
                 vkCreateShaderModule
@@ -147,6 +164,19 @@ HelloTriangleApplication
             vkDestroyBuffer stagingBuffer
             vkFreeMemory stagingBufferMemory
 
+        createUniformBuffers
+            for i = 0; i < MAX_FRAMES_IN_FLIGHT
+                createBuffer
+                vkMapMemory
+
+        createDescriptorPool
+            vkCreateDescriptorPool
+
+        createDescriptorSets
+            vkAllocateDescriporSets
+            for i = 0; i < MAX_FRAMES_IN_FLIGHT
+                vkUpdateDescriptorSets
+
         createCommandBuffers
             vkAllocateCommandBuffers
 
@@ -166,6 +196,8 @@ HelloTriangleApplication
         else if res != VK_SUCCESS and res != VK_SUBOPTIMAL_KHR
             return error.FailedToAcquireSwapChainImage
 
+        updateUniformBuffer currentFrame
+
         vkResetFences inFlightFences[currentFrame]
 
         vkResetCommandBuffer
@@ -177,8 +209,8 @@ HelloTriangleApplication
             vkCmdBindIndexBuffer
             vkCmdSetViewport
             vkCmdSetScissor
-            //vkCmdDraw // only if drawing non-indexed
-            vkCmdDrawIndexed
+            vkCmdBindDescriptorSets
+            vkCmdDrawIndexed  // vkCmdDraw - only if drawing non-indexed
             vkCmdEndRenderPass
             vkEndCommandBuffer
 
@@ -201,16 +233,23 @@ HelloTriangleApplication
     cleanup
         cleanupSwapChain
 
+        vkDestroyPipeline
+        vkDestroyPipelineLayout
+        vkDestroyRenderPass
+
+        for i = 0; i < MAX_FRAMES_IN_FLIGHT
+            vkDestroyBuffer uniformBuffers[i]
+            vkFreeMemory uniformBuffersMemory[i]
+
+        vkDestroyDescriptorPool
+
+        vkDestroyDescriptorSetLayout
+
         vkDestroyBuffer indexBuffer
         vkFreeMemory indexBufferMemory
 
         vkDestroyBuffer vertexBuffer
         vkFreeMemory vertexBufferMemory
-
-        vkDestroyPipeline
-        vkDestroyPipelineLayout
-
-        vkDestroyRenderPass
 
         for i = 0; while i < MAX_FRAMES_IN_FLIGHT
             vkDestroySemaphore renderFinishedSemaphoresj[i]
@@ -259,6 +298,7 @@ HelloTriangleApplication
         findQueueFamilies
         vkCreateBuffer
         vkGetBufferMemoryRequirements
+        findMemoryType
         vkAllocateMemory
         vkBindBufferMemory
 
@@ -270,6 +310,10 @@ HelloTriangleApplication
         vkQueueSubmit
         vkQueueWaitIdle
         vkFreeCommandBuffers
+
+    updateUniformBuffer currentImage
+        ubo: UniformBufferObject = // custom transform
+        uniformBufferMapped[currentImage].* = ubo
 
     findQueueFamilies
         vkGetPhysicalDeviceQueueFamilyProperties

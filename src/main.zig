@@ -1,5 +1,4 @@
 const c = @cImport({
-
     @cDefine("GLFW_INCLUDE_VULKAN", "");
     @cInclude("GLFW/glfw3.h");
     @cInclude("cglm/cglm.h");
@@ -56,23 +55,25 @@ const SwapChainSupportDetails = struct {
     capabilities: c.VkSurfaceCapabilitiesKHR,
     formats:      std.ArrayList(c.VkSurfaceFormatKHR),
     presentModes: std.ArrayList(c.VkPresentModeKHR),
+    allocator:    *const std.mem.Allocator,
 
     fn init(allocator: *const std.mem.Allocator) !*SwapChainSupportDetails {
         const details        = try allocator.create(SwapChainSupportDetails);
         details.capabilities = undefined;
         details.formats      = std.ArrayList(c.VkSurfaceFormatKHR).init(allocator.*);
         details.presentModes = std.ArrayList(c.VkPresentModeKHR).init(allocator.*);
+        details.allocator    = allocator;
 
         return details;
     }
 
-    fn deinit(self: *SwapChainSupportDetails, allocator: *const std.mem.Allocator) void {
+    fn deinit(self: *SwapChainSupportDetails) void {
         self.formats.deinit();
         self.formats      = undefined;
         self.presentModes.deinit();
         self.presentModes = undefined;
 
-        allocator.destroy(self);
+        self.allocator.destroy(self);
     }
 };
 
@@ -121,6 +122,12 @@ const indices: [6]u16 = .{
     0, 1, 2, 2, 3, 0
 };
 
+const UniformBufferObject  = struct {
+    model: c.mat4 align(16) = undefined,
+    view:  c.mat4 align(16) = undefined,
+    proj:  c.mat4 align(16) = undefined,
+};
+
 const HelloTriangleApplication = struct {
     window:  ?*c.GLFWwindow = undefined,
     surface: c.VkSurfaceKHR = undefined,
@@ -141,9 +148,10 @@ const HelloTriangleApplication = struct {
     presentQueue:   c.VkQueue = undefined,
     transferQueue:  c.VkQueue = undefined,
 
-    renderPass:       c.VkRenderPass     = undefined,
-    pipelineLayout:   c.VkPipelineLayout = undefined,
-    graphicsPipeline: c.VkPipeline       = undefined,
+    renderPass:          c.VkRenderPass          = undefined,
+    descriptorSetLayout: c.VkDescriptorSetLayout = undefined,
+    pipelineLayout:      c.VkPipelineLayout      = undefined,
+    graphicsPipeline:    c.VkPipeline            = undefined,
 
     swapChainFramebuffers: []c.VkFramebuffer = undefined,
 
@@ -157,12 +165,21 @@ const HelloTriangleApplication = struct {
     vertexBufferMemory: c.VkDeviceMemory = undefined,
     indexBufferMemory:  c.VkDeviceMemory = undefined,
 
+    uniformBuffers:       [MAX_FRAMES_IN_FLIGHT]c.VkBuffer           = undefined,
+    uniformBuffersMemory: [MAX_FRAMES_IN_FLIGHT]c.VkDeviceMemory     = undefined,
+    uniformBuffersMapped: [MAX_FRAMES_IN_FLIGHT]*UniformBufferObject = undefined,
+
+    descriptorPool: c.VkDescriptorPool                      = undefined,
+    descriptorSets: [MAX_FRAMES_IN_FLIGHT]c.VkDescriptorSet = undefined,
+
     imageAvailableSemaphores: [MAX_FRAMES_IN_FLIGHT]c.VkSemaphore = undefined,
     renderFinishedSemaphores: [MAX_FRAMES_IN_FLIGHT]c.VkSemaphore = undefined,
     inFlightFences:           [MAX_FRAMES_IN_FLIGHT]c.VkFence     = undefined,
     currentFrame:             u32                                 = 0,
 
     framebufferResized: bool = false,
+
+    startTime: i64,
 
     allocator: *const std.mem.Allocator,
 
@@ -201,11 +218,15 @@ const HelloTriangleApplication = struct {
         try self.createSwapChain();
         try self.createImageViews();
         try self.createRenderPass();
+        try self.createDescriptorSetLayout();
         try self.createGraphicsPipeline();
         try self.createFramebuffers();
         try self.createCommandPools();
         try self.createVertexBuffer();
         try self.createIndexBuffer();
+        try self.createUniformBuffers();
+        try self.createDescriptorPool();
+        try self.createDescriptorSets();
         try self.createCommandBuffers();
         try self.createSyncObjects();
     }
@@ -222,16 +243,24 @@ const HelloTriangleApplication = struct {
     fn cleanup(self: *HelloTriangleApplication) !void {
         self.cleanupSwapChain();
 
+        c.vkDestroyPipeline(self.device, self.graphicsPipeline, null);
+        c.vkDestroyPipelineLayout(self.device, self.pipelineLayout, null);
+        c.vkDestroyRenderPass(self.device, self.renderPass, null);
+
+        for (0..self.uniformBuffers.len) |i| {
+            c.vkDestroyBuffer(self.device, self.uniformBuffers[i], null);
+            c.vkFreeMemory(self.device, self.uniformBuffersMemory[i], null);
+        }
+
+        c.vkDestroyDescriptorPool(self.device, self.descriptorPool, null);
+
+        c.vkDestroyDescriptorSetLayout(self.device, self.descriptorSetLayout, null);
+
         c.vkDestroyBuffer(self.device, self.vertexBuffer, null);
         c.vkFreeMemory(self.device, self.vertexBufferMemory, null);
 
         c.vkDestroyBuffer(self.device, self.indexBuffer, null);
         c.vkFreeMemory(self.device, self.indexBufferMemory, null);
-
-        c.vkDestroyPipeline(self.device, self.graphicsPipeline, null);
-        c.vkDestroyPipelineLayout(self.device, self.pipelineLayout, null);
-
-        c.vkDestroyRenderPass(self.device, self.renderPass, null);
 
         for (0..MAX_FRAMES_IN_FLIGHT) |i| {
             c.vkDestroySemaphore(self.device, self.imageAvailableSemaphores[i], null);
@@ -421,7 +450,7 @@ const HelloTriangleApplication = struct {
 
     fn createSwapChain(self: *HelloTriangleApplication) !void {
         const swapChainSupport = try querySwapChainSupport(self.physicalDevice, self.surface, self.allocator);
-        defer swapChainSupport.deinit(self.allocator);
+        defer swapChainSupport.deinit();
 
         const surfaceFormat       = chooseSwapSurfaceFormat(&swapChainSupport.formats);
         self.swapChainImageFormat = surfaceFormat.format;
@@ -546,6 +575,26 @@ const HelloTriangleApplication = struct {
         }
     }
 
+    fn createDescriptorSetLayout(self: *HelloTriangleApplication) !void {
+        const uboLayoutBinding: c.VkDescriptorSetLayoutBinding = .{
+            .binding            = 0,
+            .descriptorType     = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .descriptorCount    = 1,
+            .stageFlags         = c.VK_SHADER_STAGE_VERTEX_BIT,
+            .pImmutableSamplers = null, // Optional
+        };
+
+        const layoutInfo: c.VkDescriptorSetLayoutCreateInfo = .{
+            .sType        = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .bindingCount = 1,
+            .pBindings    = &uboLayoutBinding,
+        };
+
+        if (c.vkCreateDescriptorSetLayout(self.device, &layoutInfo, null, &self.descriptorSetLayout) != c.VK_SUCCESS) {
+            return error.FailedToCreateDescriptorSetLayout;
+        }
+    }
+
     fn createGraphicsPipeline(self: *HelloTriangleApplication) !void {
         const vertShaderCode = try readFile("shaders/vert.spv", self.allocator);
         defer self.allocator.free(vertShaderCode);
@@ -599,7 +648,7 @@ const HelloTriangleApplication = struct {
             .polygonMode             = c.VK_POLYGON_MODE_FILL,
             .lineWidth               = 1.0,
             .cullMode                = c.VK_CULL_MODE_BACK_BIT,
-            .frontFace               = c.VK_FRONT_FACE_CLOCKWISE,
+            .frontFace               = c.VK_FRONT_FACE_COUNTER_CLOCKWISE,
             .depthBiasEnable         = c.VK_FALSE,
         };
 
@@ -631,7 +680,9 @@ const HelloTriangleApplication = struct {
         };
 
         const pipelineLayoutInfo: c.VkPipelineLayoutCreateInfo = .{
-            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .sType          = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .setLayoutCount = 1,
+            .pSetLayouts    = &self.descriptorSetLayout,
         };
         if (c.vkCreatePipelineLayout(self.device, &pipelineLayoutInfo, null, &self.pipelineLayout) != c.VK_SUCCESS) {
             return error.FailedToCreatePipelineLayout;
@@ -722,9 +773,9 @@ const HelloTriangleApplication = struct {
             &stagingBufferMemory,
         );
 
-        var data: ?[]Vertex = undefined;
+        var data: [*]Vertex = undefined;
         _ = c.vkMapMemory(self.device, stagingBufferMemory, 0, bufferSize, 0, @ptrCast(&data));
-        @memcpy(data.?.ptr, &vertices);
+        @memcpy(data, &vertices);
         c.vkUnmapMemory(self.device, stagingBufferMemory);
 
         try self.createBuffer(
@@ -754,9 +805,9 @@ const HelloTriangleApplication = struct {
             &stagingBufferMemory,
         );
 
-        var data: ?[]u16 = undefined;
+        var data: [*]u16 = undefined;
         _ = c.vkMapMemory(self.device, stagingBufferMemory, 0, bufferSize, 0, @ptrCast(&data));
-        @memcpy(data.?.ptr, &indices);
+        @memcpy(data, &indices);
         c.vkUnmapMemory(self.device, stagingBufferMemory);
 
         try self.createBuffer(
@@ -771,6 +822,78 @@ const HelloTriangleApplication = struct {
 
         c.vkDestroyBuffer(self.device, stagingBuffer, null);
         c.vkFreeMemory(self.device, stagingBufferMemory, null);
+    }
+
+    fn createUniformBuffers(self: *HelloTriangleApplication) !void {
+        const bufferSize = @sizeOf(UniformBufferObject);
+
+        for (0..self.uniformBuffers.len) |i| {
+            try self.createBuffer(
+                bufferSize,
+                c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                &self.uniformBuffers[i],
+                &self.uniformBuffersMemory[i],
+            );
+            _ = c.vkMapMemory(self.device, self.uniformBuffersMemory[i], 0, bufferSize, 0, @ptrCast(@alignCast(&self.uniformBuffersMapped[i])));
+        }
+    }
+
+    fn createDescriptorPool(self: *HelloTriangleApplication) !void  {
+        const poolSize: c.VkDescriptorPoolSize = .{
+            .type            = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .descriptorCount = MAX_FRAMES_IN_FLIGHT,
+        };
+
+        const poolInfo: c.VkDescriptorPoolCreateInfo = .{
+            .sType         = c.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .poolSizeCount = 1,
+            .pPoolSizes    = &poolSize,
+            .maxSets       = MAX_FRAMES_IN_FLIGHT,
+        };
+
+        if (c.vkCreateDescriptorPool(self.device, &poolInfo, null, &self.descriptorPool) != c.VK_SUCCESS) {
+            return error.FailedToCreateDescriptorPool;
+        }
+    }
+
+    fn createDescriptorSets(self: *HelloTriangleApplication) !void {
+        var layouts: [MAX_FRAMES_IN_FLIGHT]c.VkDescriptorSetLayout = undefined;
+        for (0..layouts.len) |i| {
+            layouts[i] = self.descriptorSetLayout;
+        }
+        const allocInfo: c.VkDescriptorSetAllocateInfo = .{
+            .sType              = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .descriptorPool     = self.descriptorPool,
+            .descriptorSetCount = layouts.len,
+            .pSetLayouts        = &layouts,
+        };
+
+        if (c.vkAllocateDescriptorSets(self.device, &allocInfo, &self.descriptorSets) != c.VK_SUCCESS) {
+            return error.FailedToAllocateDescriptorSets;
+        }
+
+        for (0..self.descriptorSets.len) |i| {
+            const bufferInfo: c.VkDescriptorBufferInfo = .{
+                .buffer = self.uniformBuffers[i],
+                .offset = 0,
+                .range  = @sizeOf(UniformBufferObject),
+            };
+
+            const descriptorWrite: c.VkWriteDescriptorSet = .{
+                .sType            = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet           = self.descriptorSets[i],
+                .dstBinding       = 0,
+                .dstArrayElement  = 0,
+                .descriptorType   = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .descriptorCount  = 1,
+                .pBufferInfo      = &bufferInfo,
+                .pImageInfo       = null, // Optional
+                .pTexelBufferView = null, // Optional
+            };
+
+            c.vkUpdateDescriptorSets(self.device, 1, &descriptorWrite, 0, null);
+        }
     }
 
     fn createBuffer(
@@ -858,6 +981,25 @@ const HelloTriangleApplication = struct {
             }
         }
         return error.FailedToFindSuitableMemoryType;
+    }
+
+    fn updateUniformBuffer(self: *HelloTriangleApplication, currentImage: u32) void {
+        const currentTime = std.time.timestamp();
+        const time: f32   = @floatFromInt(currentTime - self.startTime);
+
+        var ubo: UniformBufferObject align(32) = .{};
+        c.glm_mat4_identity(&ubo.model);
+        c.glm_mat4_identity(&ubo.view);
+        c.glm_mat4_identity(&ubo.proj);
+
+        c.glm_rotate(&ubo.model, time * c.glm_rad(90.0), @constCast(&c.vec3{0.0, 0.0, 1.0}));
+        c.glm_lookat(@constCast(&c.vec3{2.0, 2.0, 2.0}), @constCast(&c.vec3{0.0, 0.0, 0.0}), @constCast(&c.vec3{0.0, 0.0, 1.0}), &ubo.view);
+        const width:  f32 = @floatFromInt(self.swapChainExtent.width);
+        const height: f32 = @floatFromInt(self.swapChainExtent.height);
+        c.glm_perspective(c.glm_rad(45.0), width / height, 0.1, 10.0, &ubo.proj);
+        ubo.proj[1][1] *= -1;
+
+        self.uniformBuffersMapped[currentImage].* = ubo;
     }
 
     fn createCommandBuffers(self: *HelloTriangleApplication) !void {
@@ -953,7 +1095,8 @@ const HelloTriangleApplication = struct {
 
         c.vkCmdBindIndexBuffer(commandBuffer, self.indexBuffer, 0, c.VK_INDEX_TYPE_UINT16);
 
-        //c.vkCmdDraw(commandBuffer, vertices.len, 1, 0, 0);
+        c.vkCmdBindDescriptorSets(commandBuffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipelineLayout, 0, 1, &self.descriptorSets[self.currentFrame], 0, null);
+
         c.vkCmdDrawIndexed(commandBuffer, indices.len, 1, 0, 0, 0);
 
         c.vkCmdEndRenderPass(commandBuffer);
@@ -977,6 +1120,8 @@ const HelloTriangleApplication = struct {
             else => return error.FailedToAcquireSwapChainImage,
 
         }
+
+        self.updateUniformBuffer(self.currentFrame);
 
         _ = c.vkResetFences(self.device, 1, &self.inFlightFences[self.currentFrame]);
 
@@ -1124,7 +1269,7 @@ const HelloTriangleApplication = struct {
         }
 
         var swapChainSupport: *SwapChainSupportDetails = try querySwapChainSupport(device, surface, allocator);
-        defer swapChainSupport.deinit(allocator);
+        defer swapChainSupport.deinit();
         const swapChainAdequate: bool = swapChainSupport.formats.items.len > 0 and swapChainSupport.presentModes.items.len > 0;
 
         return familyIndices.isComplete() and swapChainAdequate;
@@ -1257,7 +1402,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var app: HelloTriangleApplication = .{ .allocator = &allocator };
+    var app: HelloTriangleApplication = .{ .allocator = &allocator, .startTime = std.time.timestamp()};
 
     try app.run();
 }

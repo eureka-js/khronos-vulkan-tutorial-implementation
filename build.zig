@@ -40,6 +40,7 @@ pub fn build(b: *std.Build) void {
         .files = &.{
             "libs/cglm/src/vec2.c",
             "libs/cglm/src/vec3.c",
+            "libs/cglm/src/mat4.c",
         },
         .flags = &.{},
     });
