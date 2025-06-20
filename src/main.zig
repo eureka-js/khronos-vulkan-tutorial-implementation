@@ -1,7 +1,9 @@
 const c = @cImport({
     @cDefine("GLFW_INCLUDE_VULKAN", "");
     @cInclude("GLFW/glfw3.h");
+
     @cInclude("cglm/cglm.h");
+    @cInclude("stb_image.h");
 });
 
 const std     = @import("std");
@@ -160,6 +162,9 @@ const HelloTriangleApplication = struct {
     graphicsCommandBuffers: [MAX_FRAMES_IN_FLIGHT]c.VkCommandBuffer = undefined,
     transferCommandBuffers: [MAX_FRAMES_IN_FLIGHT]c.VkCommandBuffer = undefined,
 
+    textureImage:      c.VkImage        = undefined,
+    textureImageMemory: c.VkDeviceMemory = undefined,
+
     vertexBuffer:       c.VkBuffer       = undefined,
     indexBuffer:        c.VkBuffer       = undefined,
     vertexBufferMemory: c.VkDeviceMemory = undefined,
@@ -222,6 +227,7 @@ const HelloTriangleApplication = struct {
         try self.createGraphicsPipeline();
         try self.createFramebuffers();
         try self.createCommandPools();
+        try self.createTextureImage();
         try self.createVertexBuffer();
         try self.createIndexBuffer();
         try self.createUniformBuffers();
@@ -242,6 +248,9 @@ const HelloTriangleApplication = struct {
 
     fn cleanup(self: *HelloTriangleApplication) !void {
         self.cleanupSwapChain();
+
+        c.vkDestroyImage(self.device, self.textureImage, null);
+        c.vkFreeMemory(self.device, self.textureImageMemory, null);
 
         c.vkDestroyPipeline(self.device, self.graphicsPipeline, null);
         c.vkDestroyPipelineLayout(self.device, self.pipelineLayout, null);
@@ -400,8 +409,7 @@ const HelloTriangleApplication = struct {
             }
         }
 
-        const vkNullHandle: c.VkPhysicalDevice = @ptrCast(c.VK_NULL_HANDLE);
-        if (self.physicalDevice == vkNullHandle) {
+        if (self.physicalDevice == @as(c.VkPhysicalDevice, @ptrCast(c.VK_NULL_HANDLE))) {
             return error.FailedToFindASuitableGpu;
         }
     }
@@ -760,6 +768,52 @@ const HelloTriangleApplication = struct {
         }
     }
 
+    fn createTextureImage(self: *HelloTriangleApplication) !void {
+        var texWidth:    c_int          = undefined;
+        var texHeight:   c_int          = undefined;
+        var texChannels: c_int          = undefined;
+        const pixels:    *c.stbi_uc     = c.stbi_load("textures/texture.jpg", &texWidth, &texHeight, &texChannels, c.STBI_rgb_alpha);
+        defer c.stbi_image_free(pixels);
+        const imageSize: c.VkDeviceSize = @intCast(texWidth * texHeight * 4);
+
+        if (pixels.* == 0) {
+            return error.FailedToLoadTextureImage;
+        }
+
+        var stagingBuffer:       c.VkBuffer       = undefined;
+        var stagingBufferMemory: c.VkDeviceMemory = undefined;
+        try self.createBuffer(
+            imageSize,
+            c.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &stagingBuffer,
+            &stagingBufferMemory,
+        );
+
+        var data: *c.stbi_uc = undefined;
+        _ = c.vkMapMemory(self.device, stagingBufferMemory, 0, imageSize, 0, @ptrCast(&data));
+        data.* = pixels.*;
+        c.vkUnmapMemory(self.device, stagingBufferMemory);
+
+        try self.createImage(
+            @intCast(texWidth),
+            @intCast(texHeight),
+            c.VK_FORMAT_R8G8B8A8_SRGB,
+            c.VK_IMAGE_TILING_OPTIMAL,
+            c.VK_IMAGE_USAGE_TRANSFER_DST_BIT | c.VK_IMAGE_USAGE_SAMPLED_BIT,
+            c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            &self.textureImage,
+            &self.textureImageMemory,
+        );
+
+        try self.transitionImageLayout(self.textureImage, c.VK_FORMAT_R8G8B8A8_SRGB, c.VK_IMAGE_LAYOUT_UNDEFINED, c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        try self.copyBufferToImage(stagingBuffer, self.textureImage, @intCast(texWidth), @intCast(texHeight));
+        try self.transitionImageLayout(self.textureImage, c.VK_FORMAT_R8G8B8A8_SRGB, c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+        c.vkDestroyBuffer(self.device, stagingBuffer, null);
+        c.vkFreeMemory(self.device, stagingBufferMemory, null);
+    }
+
     fn createVertexBuffer(self: *HelloTriangleApplication) !void {
         const bufferSize: c.VkDeviceSize = @sizeOf(@TypeOf(vertices[0])) * vertices.len;
 
@@ -934,21 +988,58 @@ const HelloTriangleApplication = struct {
         _ = c.vkBindBufferMemory(self.device, buffer.*, bufferMemory.*, 0);
     }
 
-    fn copyBuffer(self: *HelloTriangleApplication, srcBuffer: c.VkBuffer, dstBuffer: c.VkBuffer, size: c.VkDeviceSize) void {
-        const allocInfo: c.VkCommandBufferAllocateInfo = .{
-            .sType              = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-            .level              = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-            .commandPool        = self.transferCommandPool,
-            .commandBufferCount = 1,
+    fn createImage(
+        self:        *HelloTriangleApplication,
+        width:       u32,
+        height:      u32,
+        format:      c.VkFormat,
+        tiling:      c.VkImageTiling,
+        usage:       c.VkImageUsageFlags,
+        properties:  c.VkMemoryPropertyFlags,
+        image:       *c.VkImage,
+        imageMemory: *c.VkDeviceMemory,
+    ) !void {
+        const imageInfo: c.VkImageCreateInfo = .{
+            .sType         = c.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .imageType     = c.VK_IMAGE_TYPE_2D,
+            .extent        = .{
+                .width  = width,
+                .height = height,
+                .depth  = 1,
+            },
+            .mipLevels     = 1,
+            .arrayLayers   = 1,
+            .format        = format,
+            .tiling        = tiling,
+            .initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
+            .usage         = usage,
+            .sharingMode   = c.VK_SHARING_MODE_EXCLUSIVE,
+            .samples       = c.VK_SAMPLE_COUNT_1_BIT,
+            .flags         = 0,
         };
-        var commandBuffer: c.VkCommandBuffer = undefined;
-        _ = c.vkAllocateCommandBuffers(self.device, &allocInfo, &commandBuffer);
 
-        const beginInfo: c.VkCommandBufferBeginInfo = .{
-            .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .flags = c.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        if (c.vkCreateImage(self.device, &imageInfo, null, image) != c.VK_SUCCESS) {
+            return error.FailedToCreateImage;
+        }
+
+        var memRequirements: c.VkMemoryRequirements = undefined;
+        c.vkGetImageMemoryRequirements(self.device, image.*, &memRequirements);
+
+        const allocInfo: c.VkMemoryAllocateInfo = .{
+            .sType           = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .allocationSize  = memRequirements.size,
+            .memoryTypeIndex = try self.findMemoryType(memRequirements.memoryTypeBits, properties),
         };
-        _ = c.vkBeginCommandBuffer(commandBuffer, &beginInfo);
+
+        if (c.vkAllocateMemory(self.device, &allocInfo, null, imageMemory) != c.VK_SUCCESS) {
+            return error.FailedToALlocateImageMemory;
+        }
+
+        _ = c.vkBindImageMemory(self.device, image.*, imageMemory.*, 0);
+    }
+
+    fn copyBuffer(self: *HelloTriangleApplication, srcBuffer: c.VkBuffer, dstBuffer: c.VkBuffer, size: c.VkDeviceSize) void {
+        const commandBuffer: c.VkCommandBuffer = try self.beginSingleTimeCommands(self.transferCommandPool);
 
         var copyRegion: c.VkBufferCopy = .{
             .srcOffset = 0, // Optional
@@ -957,18 +1048,44 @@ const HelloTriangleApplication = struct {
         };
         c.vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
 
-        _ = c.vkEndCommandBuffer(commandBuffer);
+        try self.endSingleTimeCommands(self.transferCommandPool, self.transferQueue, commandBuffer);
+    }
 
-        const submitInfo: c.VkSubmitInfo = .{
-            .sType              = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
-            .commandBufferCount = 1,
-            .pCommandBuffers    = &commandBuffer,
+    fn copyBufferToImage(self: *HelloTriangleApplication, buffer: c.VkBuffer, image: c.VkImage, width: u32, height: u32) !void {
+        const commandBuffer: c.VkCommandBuffer = try self.beginSingleTimeCommands(self.transferCommandPool);
+
+        const region: c.VkBufferImageCopy = .{
+            .bufferOffset      = 0,
+            .bufferRowLength   = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource  = .{
+                .aspectMask     = c.VK_IMAGE_ASPECT_COLOR_BIT,
+                .mipLevel       = 0,
+                .baseArrayLayer = 0,
+                .layerCount     = 1,
+            },
+            .imageOffset       = .{
+                .x = 0,
+                .y = 0,
+                .z = 0,
+            },
+            .imageExtent       = .{
+                .width  = width,
+                .height = height,
+                .depth  = 1,
+            },
         };
-        _ = c.vkQueueSubmit(self.transferQueue, 1, &submitInfo, @ptrCast(c.VK_NULL_HANDLE));
 
-        _ = c.vkQueueWaitIdle(self.transferQueue);
+        c.vkCmdCopyBufferToImage(
+            commandBuffer,
+            buffer,
+            image,
+            c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            1,
+            &region,
+        );
 
-        c.vkFreeCommandBuffers(self.device, self.transferCommandPool, 1, &commandBuffer);
+        try self.endSingleTimeCommands(self.transferCommandPool, self.transferQueue, commandBuffer);
     }
 
     fn findMemoryType(self: *HelloTriangleApplication, typeFilter: u32, properties: c.VkMemoryPropertyFlags) !u32 {
@@ -1104,6 +1221,108 @@ const HelloTriangleApplication = struct {
         if (c.vkEndCommandBuffer(commandBuffer) != c.VK_SUCCESS) {
             return error.FailedToRecordCommandBuffer;
         }
+    }
+
+    fn beginSingleTimeCommands(self: *HelloTriangleApplication, commandPool: c.VkCommandPool) !c.VkCommandBuffer {
+        const allocInfo: c.VkCommandBufferAllocateInfo = .{
+            .sType              = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .level              = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandPool        = commandPool,
+            .commandBufferCount = 1,
+        };
+        var commandBuffer: c.VkCommandBuffer = undefined;
+        _ = c.vkAllocateCommandBuffers(self.device, &allocInfo, &commandBuffer);
+
+        const beginInfo: c.VkCommandBufferBeginInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .flags = c.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        };
+        _ = c.vkBeginCommandBuffer(commandBuffer, &beginInfo);
+
+        return commandBuffer;
+    }
+
+    fn endSingleTimeCommands(
+        self:          *HelloTriangleApplication,
+        commandPool:   c.VkCommandPool,
+        queue:         c.VkQueue,
+        commandBuffer: c.VkCommandBuffer
+    ) !void {
+        _ = c.vkEndCommandBuffer(commandBuffer);
+
+        const submitInfo: c.VkSubmitInfo = .{
+            .sType              = c.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .commandBufferCount = 1,
+            .pCommandBuffers    = &commandBuffer,
+        };
+        _ = c.vkQueueSubmit(queue, 1, &submitInfo, @ptrCast(c.VK_NULL_HANDLE));
+
+        _ = c.vkQueueWaitIdle(queue);
+
+        c.vkFreeCommandBuffers(self.device, commandPool, 1, &commandBuffer);
+    }
+
+    fn transitionImageLayout(
+        self:      *HelloTriangleApplication,
+        image:     c.VkImage,
+        format:    c.VkFormat,
+        oldLayout: c.VkImageLayout,
+        newLayout: c.VkImageLayout,
+    ) !void {
+        _ = format;
+
+        const commandBuffer: c.VkCommandBuffer = try self.beginSingleTimeCommands(self.graphicsCommandPool);
+
+        var barrier: c.VkImageMemoryBarrier = .{
+            .sType               = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .oldLayout           = oldLayout,
+            .newLayout           = newLayout,
+            .srcQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
+            .image               = image,
+            .subresourceRange    = .{
+                .aspectMask     = c.VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel   = 0,
+                .levelCount     = 1,
+                .baseArrayLayer = 0,
+                .layerCount     = 1,
+            },
+            .srcAccessMask       = 0, // TODO
+            .dstAccessMask       = 0, // TODO
+        };
+
+        var sourceStage:      c.VkPipelineStageFlags = undefined;
+        var destinationStage: c.VkPipelineStageFlags = undefined;
+        if (oldLayout == c.VK_IMAGE_LAYOUT_UNDEFINED and newLayout == c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+            barrier.srcAccessMask = 0;
+            barrier.dstAccessMask = c.VK_ACCESS_TRANSFER_WRITE_BIT;
+
+            sourceStage      = c.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+            destinationStage = c.VK_PIPELINE_STAGE_TRANSFER_BIT;
+        } else if (oldLayout == c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL and newLayout == c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+            barrier.srcAccessMask = c.VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask = c.VK_ACCESS_SHADER_READ_BIT;
+
+            sourceStage      = c.VK_PIPELINE_STAGE_TRANSFER_BIT;
+            destinationStage = c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        } else {
+            return error.UnsupportedLayoutTransition;
+        }
+
+        c.vkCmdPipelineBarrier(
+            commandBuffer,
+            sourceStage,
+            destinationStage,
+            0,
+            0,
+            null,
+            0,
+            null,
+            1, 
+            &barrier,
+        );
+
+        try self.endSingleTimeCommands(self.graphicsCommandPool, self.graphicsQueue, commandBuffer);
     }
 
     fn drawFrame(self: *HelloTriangleApplication) !void {

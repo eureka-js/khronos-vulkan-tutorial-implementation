@@ -43,6 +43,9 @@ struct HelloTriangleApplication
     commandPool:    VkCommandPool
     commandBuffers: [MAX_FRAMES_IN_FLIGHT]VkCommandBuffer
 
+    textureImage:       VkImage
+    textureImageMemory: VkDeviceMemory
+
     vertexBuffer:       VkBuffer
     indexBuffer:        VkBuffer
     vertexBufferMemory: VkDeviceMemory
@@ -146,6 +149,17 @@ struct HelloTriangleApplication
         createCommandPool
             vkCreateCommandPool
 
+        createTextureImage
+            createBuffer stagingBuffer stagingBufferMemory
+            vkMapMemory stagingBufferMemory
+            vkUnmapMemory stagingBufferMemory
+            createImage
+            transitionImageLayout
+            copyBufferToImage
+            transitionImageLayout
+            vkDestroyBuffer
+            vkFreeMemory
+
         createVertexBuffer
             createBuffer stagingBuffer stagingBufferMemory
             vkMapMemory stagingBufferMemory
@@ -233,6 +247,9 @@ struct HelloTriangleApplication
     cleanup
         cleanupSwapChain
 
+        vkDestroyImage
+        vkFreeMemory
+
         vkDestroyPipeline
         vkDestroyPipelineLayout
         vkDestroyRenderPass
@@ -294,6 +311,12 @@ struct HelloTriangleApplication
         createImageViews
         createFramebuffers
 
+    createImage
+        vkCreateImage
+        vkGetImageMemoryRequirements
+        vkAllocateMemory
+        vkBindImageMemory
+
     createBuffer
         findQueueFamilies
         vkCreateBuffer
@@ -303,13 +326,29 @@ struct HelloTriangleApplication
         vkBindBufferMemory
 
     copyBuffer // submiting to transfer queue
+        beginSingleTimeCommands
+        vkCmdCopyBuffer
+        endSingleTimeCommands
+
+    copyBufferToImage
+        beginSingleTimeCommands
+        vkCmdCopyBufferToImage
+        endSingleTimeCommands
+
+    beginSingleTimeCommands // returns a command buffer
         vkAllocateCommandBuffers
         vkBeginCommandBuffer
-        vkCmdCopyBuffer
+
+    endSingleTimeCommands
         vkEndCommandBuffer
         vkQueueSubmit
         vkQueueWaitIdle
         vkFreeCommandBuffers
+
+    transitionImageLayout
+        beginSingleTimeCommands
+        vkCmdPipelineBarrier
+        endSingleTimeCommands
 
     updateUniformBuffer currentImage
         ubo: UniformBufferObject = // custom transform
