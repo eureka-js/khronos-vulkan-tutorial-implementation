@@ -162,8 +162,10 @@ const HelloTriangleApplication = struct {
     graphicsCommandBuffers: [MAX_FRAMES_IN_FLIGHT]c.VkCommandBuffer = undefined,
     transferCommandBuffers: [MAX_FRAMES_IN_FLIGHT]c.VkCommandBuffer = undefined,
 
-    textureImage:      c.VkImage        = undefined,
+    textureImage:       c.VkImage        = undefined,
     textureImageMemory: c.VkDeviceMemory = undefined,
+    textureImageView:   c.VkImageView    = undefined,
+    textureSampler:     c.VkSampler      = undefined,
 
     vertexBuffer:       c.VkBuffer       = undefined,
     indexBuffer:        c.VkBuffer       = undefined,
@@ -228,6 +230,8 @@ const HelloTriangleApplication = struct {
         try self.createFramebuffers();
         try self.createCommandPools();
         try self.createTextureImage();
+        try self.createTextureImageView();
+        try self.createTextureSampler();
         try self.createVertexBuffer();
         try self.createIndexBuffer();
         try self.createUniformBuffers();
@@ -249,6 +253,7 @@ const HelloTriangleApplication = struct {
     fn cleanup(self: *HelloTriangleApplication) !void {
         self.cleanupSwapChain();
 
+        c.vkDestroyImageView(self.device, self.textureImageView, null);
         c.vkDestroyImage(self.device, self.textureImage, null);
         c.vkFreeMemory(self.device, self.textureImageMemory, null);
 
@@ -437,7 +442,9 @@ const HelloTriangleApplication = struct {
             try queueCreateInfos.append(queueCreateInfo);
         }
 
-        var deviceFeatures: c.VkPhysicalDeviceFeatures = .{};
+        var deviceFeatures: c.VkPhysicalDeviceFeatures = .{
+            .samplerAnisotropy = c.VK_TRUE,
+        };
 
         const createInfo: c.VkDeviceCreateInfo = .{
             .sType                   = c.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
@@ -509,30 +516,9 @@ const HelloTriangleApplication = struct {
 
     fn createImageViews(self: *HelloTriangleApplication) !void {
         self.swapChainImageViews = try self.allocator.alloc(c.VkImageView, self.swapChainImages.len);
-        for (0..self.swapChainImages.len) |i| {
-            const createInfo: c.VkImageViewCreateInfo = .{
-                .sType            = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                .image            = self.swapChainImages[i],
-                .viewType         = c.VK_IMAGE_VIEW_TYPE_2D,
-                .format           = self.swapChainImageFormat,
-                .components       = .{
-                    .r = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-                    .g = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-                    .b = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-                    .a = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-                },
-                .subresourceRange = .{
-                    .aspectMask     = c.VK_IMAGE_ASPECT_COLOR_BIT,
-                    .baseMipLevel   = 0,
-                    .levelCount     = 1,
-                    .baseArrayLayer = 0,
-                    .layerCount     = 1,
-                },
-            };
 
-            if (c.vkCreateImageView(self.device, &createInfo, null, &self.swapChainImageViews[i]) != c.VK_SUCCESS) {
-                return error.FailedToCreateImageViews;
-            }
+        for (0..self.swapChainImages.len) |i| {
+            self.swapChainImageViews[i] = try self.createImageView(self.swapChainImages[i], self.swapChainImageFormat);
         }
     }
 
@@ -812,6 +798,67 @@ const HelloTriangleApplication = struct {
 
         c.vkDestroyBuffer(self.device, stagingBuffer, null);
         c.vkFreeMemory(self.device, stagingBufferMemory, null);
+    }
+
+    fn createTextureImageView(self: *HelloTriangleApplication) !void {
+        self.textureImageView = try self.createImageView(self.textureImage, c.VK_FORMAT_R8G8B8A8_SRGB);
+    }
+
+    fn createImageView(
+        self:   *HelloTriangleApplication,
+        image:  c.VkImage,
+        format: c.VkFormat,
+    ) !c.VkImageView {
+        const viewInfo: c.VkImageViewCreateInfo = .{
+            .sType            = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .image            = image,
+            .viewType         = c.VK_IMAGE_VIEW_TYPE_2D,
+            .format           = format,
+            .subresourceRange = .{
+                .aspectMask     = c.VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel   = 0,
+                .levelCount     = 1,
+                .baseArrayLayer = 0,
+                .layerCount     = 1
+            },
+        };
+
+        var imageView: c.VkImageView = undefined;
+        if (c.vkCreateImageView(self.device, &viewInfo, null, &imageView) != c.VK_SUCCESS) {
+            return error.FailedToCreateImageView;
+        }
+
+        return imageView;
+    }
+
+    fn createTextureSampler(self: *HelloTriangleApplication) !void {
+        var properties: c.VkPhysicalDeviceProperties = undefined;
+        c.vkGetPhysicalDeviceProperties(self.physicalDevice, &properties);
+
+        const samplerInfo: c.VkSamplerCreateInfo = .{
+            .sType                   = c.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+            .magFilter               = c.VK_FILTER_LINEAR,
+            .minFilter               = c.VK_FILTER_LINEAR,
+            .addressModeU            = c.VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .addressModeV            = c.VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .addressModeW            = c.VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .anisotropyEnable        = c.VK_TRUE,
+            .maxAnisotropy           = properties.limits.maxSamplerAnisotropy,
+            .borderColor             = c.VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+            // VK_FALSE means normalized coordinates which is used more commonly in real world applications
+            // because it allows the usage of textures of varying resolutions (2025-08-23)
+            .unnormalizedCoordinates = c.VK_FALSE,
+            .compareEnable           = c.VK_FALSE,
+            .compareOp               = c.VK_COMPARE_OP_ALWAYS,
+            .mipmapMode              = c.VK_SAMPLER_MIPMAP_MODE_LINEAR,
+            .mipLodBias              = 0.0,
+            .minLod                  = 0.0,
+            .maxLod                  = 0.0,
+        };
+
+        if (c.vkCreateSampler(self.device, &samplerInfo, null, &self.textureSampler) != c.VK_SUCCESS) {
+            return error.FailedToCreateSampler;
+        }
     }
 
     fn createVertexBuffer(self: *HelloTriangleApplication) !void {
@@ -1491,7 +1538,12 @@ const HelloTriangleApplication = struct {
         defer swapChainSupport.deinit();
         const swapChainAdequate: bool = swapChainSupport.formats.items.len > 0 and swapChainSupport.presentModes.items.len > 0;
 
-        return familyIndices.isComplete() and swapChainAdequate;
+        var supportedFeatures: c.VkPhysicalDeviceFeatures = undefined;
+        c.vkGetPhysicalDeviceFeatures(device, &supportedFeatures);
+
+        return familyIndices.isComplete()
+            and swapChainAdequate
+            and supportedFeatures.samplerAnisotropy == c.VK_TRUE;
     }
 
     fn checkDeviceExtensionSupport(device: c.VkPhysicalDevice, allocator: *const std.mem.Allocator) !bool {
