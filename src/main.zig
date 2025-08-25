@@ -13,10 +13,10 @@ const WIDTH:                u32 = 800;
 const HEIGHT:               u32 = 600;
 const MAX_FRAMES_IN_FLIGHT: u32 = 2;
 
-const validationLayers: []const [*c]const u8 = &[_][*c]const u8{"VK_LAYER_KHRONOS_validation"};
-const enableValidationLayers                 = builtin.mode == .Debug;
+const validationLayers       = &[_][*c]const u8{"VK_LAYER_KHRONOS_validation"};
+const enableValidationLayers = builtin.mode == .Debug;
 
-const deviceExtensions: []const [*c]const u8 = &[_][*c]const u8{c.VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+const deviceExtensions       = &[_][*c]const u8{c.VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 
 fn createDebugUtilMessengerEXT(
     instance:        c.VkInstance,
@@ -80,8 +80,9 @@ const SwapChainSupportDetails = struct {
 };
 
 const Vertex = struct {
-    pos:   c.vec2,
-    color: c.vec3,
+    pos:      c.vec2,
+    color:    c.vec3,
+    texCoord: c.vec2,
 
     fn getBindingDescription() c.VkVertexInputBindingDescription {
         const bindingDescription: c.VkVertexInputBindingDescription = .{
@@ -93,8 +94,8 @@ const Vertex = struct {
         return bindingDescription;
     }
 
-    fn getAttributeDescriptions() [2]c.VkVertexInputAttributeDescription {
-        const attributeDescriptions: [2]c.VkVertexInputAttributeDescription = .{
+    fn getAttributeDescriptions() []const c.VkVertexInputAttributeDescription {
+        const attributeDescriptions = &[_]c.VkVertexInputAttributeDescription{
             .{
                 .binding  = 0,
                 .location = 0,
@@ -107,20 +108,26 @@ const Vertex = struct {
                 .format   = c.VK_FORMAT_R32G32B32_SFLOAT,
                 .offset   = @offsetOf(@This(), "color"),
             },
+            .{
+                .binding  = 0,
+                .location = 2,
+                .format   = c.VK_FORMAT_R32G32_SFLOAT,
+                .offset   = @offsetOf(@This(), "texCoord"),
+            },
         };
 
         return attributeDescriptions;
     }
 };
 
-const vertices: [4]Vertex = .{
-    .{.pos = .{-0.5, -0.5}, .color = .{1.0, 0.0, 0.0}},
-    .{.pos = .{ 0.5, -0.5}, .color = .{0.0, 1.0, 0.0}},
-    .{.pos = .{ 0.5,  0.5}, .color = .{0.0, 0.0, 1.0}},
-    .{.pos = .{-0.5,  0.5}, .color = .{1.0, 1.0, 1.0}},
+const vertices = [_]Vertex{
+    .{.pos = .{-0.5, -0.5}, .color = .{1.0, 0.0, 0.0}, .texCoord = .{1.0, 0.0}},
+    .{.pos = .{ 0.5, -0.5}, .color = .{0.0, 1.0, 0.0}, .texCoord = .{0.0, 0.0}},
+    .{.pos = .{ 0.5,  0.5}, .color = .{0.0, 0.0, 1.0}, .texCoord = .{0.0, 1.0}},
+    .{.pos = .{-0.5,  0.5}, .color = .{1.0, 1.0, 1.0}, .texCoord = .{1.0, 1.0}},
 };
 
-const indices: [6]u16 = .{
+const indices = [_]u16{
     0, 1, 2, 2, 3, 0
 };
 
@@ -213,7 +220,7 @@ const HelloTriangleApplication = struct {
     fn framebufferResizeCallback(window: ?*c.GLFWwindow, width: c_int, height: c_int) callconv(.c) void {
         _, _ = .{width, height};
         const app: ?*HelloTriangleApplication = @ptrCast(@alignCast(c.glfwGetWindowUserPointer(window)));
-        app.?.framebufferResized              = true;
+        app.?.framebufferResized = true;
     }
 
     fn initVulkan(self: *HelloTriangleApplication) !void {
@@ -253,7 +260,9 @@ const HelloTriangleApplication = struct {
     fn cleanup(self: *HelloTriangleApplication) !void {
         self.cleanupSwapChain();
 
+        c.vkDestroySampler(self.device, self.textureSampler, null);
         c.vkDestroyImageView(self.device, self.textureImageView, null);
+
         c.vkDestroyImage(self.device, self.textureImage, null);
         c.vkFreeMemory(self.device, self.textureImageMemory, null);
 
@@ -577,11 +586,20 @@ const HelloTriangleApplication = struct {
             .stageFlags         = c.VK_SHADER_STAGE_VERTEX_BIT,
             .pImmutableSamplers = null, // Optional
         };
+        const samplerLayoutBinding: c.VkDescriptorSetLayoutBinding = .{
+            .binding            = 1,
+            .descriptorType     = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .descriptorCount    = 1,
+            .stageFlags         = c.VK_SHADER_STAGE_FRAGMENT_BIT,
+            .pImmutableSamplers = null, // Optional
+        };
+
+        const bindings = [_]c.VkDescriptorSetLayoutBinding{ uboLayoutBinding, samplerLayoutBinding };
 
         const layoutInfo: c.VkDescriptorSetLayoutCreateInfo = .{
             .sType        = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-            .bindingCount = 1,
-            .pBindings    = &uboLayoutBinding,
+            .bindingCount = bindings.len,
+            .pBindings    = &bindings,
         };
 
         if (c.vkCreateDescriptorSetLayout(self.device, &layoutInfo, null, &self.descriptorSetLayout) != c.VK_SUCCESS) {
@@ -619,8 +637,8 @@ const HelloTriangleApplication = struct {
             .sType                           = c.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
             .vertexBindingDescriptionCount   = 1,
             .pVertexBindingDescriptions      = &bindingDescription,
-            .vertexAttributeDescriptionCount = attributeDescriptions.len,
-            .pVertexAttributeDescriptions    = &attributeDescriptions,
+            .vertexAttributeDescriptionCount = @intCast(attributeDescriptions.len),
+            .pVertexAttributeDescriptions    = attributeDescriptions.ptr,
         };
 
         const inputAssembly: c.VkPipelineInputAssemblyStateCreateInfo = .{
@@ -663,7 +681,7 @@ const HelloTriangleApplication = struct {
             .pAttachments    = &colorBlendAttachment,
         };
 
-        const dynamicStates: []const c.VkDynamicState = &[_]c.VkDynamicState{
+        const dynamicStates = &[_]c.VkDynamicState{
             c.VK_DYNAMIC_STATE_VIEWPORT,
             c.VK_DYNAMIC_STATE_SCISSOR,
         };
@@ -713,12 +731,12 @@ const HelloTriangleApplication = struct {
         self.swapChainFramebuffers = try self.allocator.alloc(c.VkFramebuffer, self.swapChainImageViews.len);
 
         for (0..self.swapChainImageViews.len) |i| {
-            const attachments:     []const c.VkImageView     = &[_]c.VkImageView{self.swapChainImageViews[i]};
+            const attachments = [_]c.VkImageView{ self.swapChainImageViews[i] };
             const frameBufferInfo: c.VkFramebufferCreateInfo = .{
                 .sType           = c.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
                 .renderPass      = self.renderPass,
                 .attachmentCount = 1,
-                .pAttachments    = attachments.ptr,
+                .pAttachments    = &attachments,
                 .width           = self.swapChainExtent.width,
                 .height          = self.swapChainExtent.height,
                 .layers          = 1,
@@ -758,11 +776,11 @@ const HelloTriangleApplication = struct {
         var texWidth:    c_int          = undefined;
         var texHeight:   c_int          = undefined;
         var texChannels: c_int          = undefined;
-        const pixels:    *c.stbi_uc     = c.stbi_load("textures/texture.jpg", &texWidth, &texHeight, &texChannels, c.STBI_rgb_alpha);
+        const pixels:    ?*c.stbi_uc    = c.stbi_load("textures/texture.jpg", &texWidth, &texHeight, &texChannels, c.STBI_rgb_alpha);
         defer c.stbi_image_free(pixels);
         const imageSize: c.VkDeviceSize = @intCast(texWidth * texHeight * 4);
 
-        if (pixels.* == 0) {
+        if (pixels == null) {
             return error.FailedToLoadTextureImage;
         }
 
@@ -776,9 +794,9 @@ const HelloTriangleApplication = struct {
             &stagingBufferMemory,
         );
 
-        var data: *c.stbi_uc = undefined;
+        var data: [*]c.stbi_uc = undefined;
         _ = c.vkMapMemory(self.device, stagingBufferMemory, 0, imageSize, 0, @ptrCast(&data));
-        data.* = pixels.*;
+        @memcpy(data, @as([*]u8, @ptrCast(pixels.?))[0..imageSize]);
         c.vkUnmapMemory(self.device, stagingBufferMemory);
 
         try self.createImage(
@@ -851,13 +869,10 @@ const HelloTriangleApplication = struct {
             .compareEnable           = c.VK_FALSE,
             .compareOp               = c.VK_COMPARE_OP_ALWAYS,
             .mipmapMode              = c.VK_SAMPLER_MIPMAP_MODE_LINEAR,
-            .mipLodBias              = 0.0,
-            .minLod                  = 0.0,
-            .maxLod                  = 0.0,
         };
 
         if (c.vkCreateSampler(self.device, &samplerInfo, null, &self.textureSampler) != c.VK_SUCCESS) {
-            return error.FailedToCreateSampler;
+            return error.FailedToCreateTextureSampler;
         }
     }
 
@@ -941,15 +956,22 @@ const HelloTriangleApplication = struct {
     }
 
     fn createDescriptorPool(self: *HelloTriangleApplication) !void  {
-        const poolSize: c.VkDescriptorPoolSize = .{
-            .type            = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            .descriptorCount = MAX_FRAMES_IN_FLIGHT,
+        const poolSizes = [_]c.VkDescriptorPoolSize{
+            .{
+                .type            = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .descriptorCount = MAX_FRAMES_IN_FLIGHT,
+            },
+            .{
+                .type            = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = MAX_FRAMES_IN_FLIGHT,
+            },
         };
 
         const poolInfo: c.VkDescriptorPoolCreateInfo = .{
             .sType         = c.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-            .poolSizeCount = 1,
-            .pPoolSizes    = &poolSize,
+            .flags         = c.VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
+            .poolSizeCount = poolSizes.len,
+            .pPoolSizes    = &poolSizes,
             .maxSets       = MAX_FRAMES_IN_FLIGHT,
         };
 
@@ -980,20 +1002,37 @@ const HelloTriangleApplication = struct {
                 .offset = 0,
                 .range  = @sizeOf(UniformBufferObject),
             };
-
-            const descriptorWrite: c.VkWriteDescriptorSet = .{
-                .sType            = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .dstSet           = self.descriptorSets[i],
-                .dstBinding       = 0,
-                .dstArrayElement  = 0,
-                .descriptorType   = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                .descriptorCount  = 1,
-                .pBufferInfo      = &bufferInfo,
-                .pImageInfo       = null, // Optional
-                .pTexelBufferView = null, // Optional
+            const imageInfo: c.VkDescriptorImageInfo = .{
+                .sampler     = self.textureSampler,
+                .imageView   = self.textureImageView,
+                .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             };
 
-            c.vkUpdateDescriptorSets(self.device, 1, &descriptorWrite, 0, null);
+            const descriptorWrites = [_]c.VkWriteDescriptorSet{
+                .{
+                    .sType            = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .dstSet           = self.descriptorSets[i],
+                    .dstBinding       = 0,
+                    .dstArrayElement  = 0,
+                    .descriptorType   = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                    .descriptorCount  = 1,
+                    .pBufferInfo      = &bufferInfo,
+                    .pImageInfo       = null, // Optional
+                    .pTexelBufferView = null, // Optional
+                },
+                .{
+                    .sType            = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .dstSet           = self.descriptorSets[i],
+                    .dstBinding       = 1,
+                    .dstArrayElement  = 0,
+                    .descriptorType   = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    .descriptorCount  = 1,
+                    .pImageInfo       = &imageInfo,
+                    .pTexelBufferView = null, // Optional
+                },
+            };
+
+            c.vkUpdateDescriptorSets(self.device, @intCast(descriptorWrites.len), &descriptorWrites, 0, null);
         }
     }
 
@@ -1253,9 +1292,9 @@ const HelloTriangleApplication = struct {
         };
         c.vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
-        const vertexBuffers: []const c.VkBuffer     = &.{self.vertexBuffer};
-        const offsets:       []const c.VkDeviceSize = &.{0};
-        c.vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers.ptr, offsets.ptr);
+        const vertexBuffers = [_]c.VkBuffer{self.vertexBuffer};
+        const offsets       = [_]c.VkDeviceSize{0};
+        c.vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffers, &offsets);
 
         c.vkCmdBindIndexBuffer(commandBuffer, self.indexBuffer, 0, c.VK_INDEX_TYPE_UINT16);
 
@@ -1394,18 +1433,18 @@ const HelloTriangleApplication = struct {
         _ = c.vkResetCommandBuffer(self.graphicsCommandBuffers[self.currentFrame], 0);
         try self.recordCommandBuffer(self.graphicsCommandBuffers[self.currentFrame], imageIndex);
 
-        const waitSemaphores:   []const c.VkSemaphore          = &.{self.imageAvailableSemaphores[self.currentFrame]};
-        const waitStages:       []const c.VkPipelineStageFlags = &.{c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
-        const signalSemaphores: []const c.VkSemaphore          = &.{self.renderFinishedSemaphores[self.currentFrame]};
+        const waitSemaphores   = [_]c.VkSemaphore{self.imageAvailableSemaphores[self.currentFrame]};
+        const waitStages       = [_]c.VkPipelineStageFlags{c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+        const signalSemaphores = [_]c.VkSemaphore{self.renderFinishedSemaphores[self.currentFrame]};
         const submitInfo:       c.VkSubmitInfo = .{
             .sType                = c.VK_STRUCTURE_TYPE_SUBMIT_INFO,
             .waitSemaphoreCount   = 1,
-            .pWaitSemaphores      = waitSemaphores.ptr,
-            .pWaitDstStageMask    = waitStages.ptr,
+            .pWaitSemaphores      = &waitSemaphores,
+            .pWaitDstStageMask    = &waitStages,
             .commandBufferCount   = 1,
             .pCommandBuffers      = &self.graphicsCommandBuffers[self.currentFrame],
             .signalSemaphoreCount = 1,
-            .pSignalSemaphores    = signalSemaphores.ptr,
+            .pSignalSemaphores    = &signalSemaphores,
         };
 
         // This follows the official Khronos Vulkan Tutorial logic, so this will cause the validation layer to
@@ -1414,11 +1453,11 @@ const HelloTriangleApplication = struct {
             return error.FailedToSubmitDrawCommandBuffer;
         }
 
-        const swapChains:  []const c.VkSwapchainKHR = &[_]c.VkSwapchainKHR{self.swapChain};
-        const presentInfo: c.VkPresentInfoKHR       = .{
+        const swapChains                      = &[_]c.VkSwapchainKHR{self.swapChain};
+        const presentInfo: c.VkPresentInfoKHR = .{
             .sType              = c.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
             .waitSemaphoreCount = 1,
-            .pWaitSemaphores    = signalSemaphores.ptr,
+            .pWaitSemaphores    = &signalSemaphores,
             .swapchainCount     = 1,
             .pSwapchains        = swapChains.ptr,
             .pImageIndices      = &imageIndex,
@@ -1661,8 +1700,8 @@ const HelloTriangleApplication = struct {
         const file = try std.fs.cwd().openFile(fileName, .{});
         defer file.close();
 
-        const stat         = try file.stat();
-        const buffer: []u8 = try file.readToEndAlloc(allocator.*, stat.size);
+        const stat   = try file.stat();
+        const buffer = try file.readToEndAlloc(allocator.*, stat.size);
 
         return buffer;
     }

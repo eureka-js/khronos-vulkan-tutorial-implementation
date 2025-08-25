@@ -45,6 +45,8 @@ struct HelloTriangleApplication
 
     textureImage:       VkImage
     textureImageMemory: VkDeviceMemory
+    textureImageView:   VkImageView
+    textureSampler:     VkSampler
 
     vertexBuffer:       VkBuffer
     indexBuffer:        VkBuffer
@@ -104,6 +106,7 @@ struct HelloTriangleApplication
                     vkGetPhysicalDeviceSurfaceCapabilitiesKHR
                     vkGetPhysicalDeviceSurfaceFormatsKHR
                     vkGetPhysicalDeviceSurfacePresentModesKHR
+                vkGetPhysicalDeviceFeatures
 
         createLogicalDevice
             findQueueFamilies
@@ -124,7 +127,8 @@ struct HelloTriangleApplication
             vkGetSwapchainImagesKHR
 
         createImageViews
-            vkCreateImageView
+            for i = 0; i < swapChainImages.len
+                swapChainImageViews[i] = createImageView
 
         createRenderPass
             vkCreateRenderPass
@@ -150,15 +154,24 @@ struct HelloTriangleApplication
             vkCreateCommandPool
 
         createTextureImage
+            stbi_load
             createBuffer stagingBuffer stagingBufferMemory
             vkMapMemory stagingBufferMemory
             vkUnmapMemory stagingBufferMemory
+            stbi_image_free
             createImage
             transitionImageLayout
             copyBufferToImage
             transitionImageLayout
             vkDestroyBuffer
             vkFreeMemory
+
+        createTextureImageView
+            createImageView
+
+        createTextureSampler
+            vkGetPhysicalDeviceProperties
+            vkCreateSampler textureSampler
 
         createVertexBuffer
             createBuffer stagingBuffer stagingBufferMemory
@@ -187,7 +200,7 @@ struct HelloTriangleApplication
             vkCreateDescriptorPool
 
         createDescriptorSets
-            vkAllocateDescriporSets
+            vkAllocateDescriptorSets
             for i = 0; i < MAX_FRAMES_IN_FLIGHT
                 vkUpdateDescriptorSets
 
@@ -195,7 +208,7 @@ struct HelloTriangleApplication
             vkAllocateCommandBuffers
 
         createSyncObjects
-            for i = 0; while i < MAX_FRAMES_IN_FLIGHT
+            for i = 0; i < MAX_FRAMES_IN_FLIGHT
                 vkCreateSemaphore imageAvailableSemaphores[i]
                 vkCreateSemaphore renderFinishedSemaphores[i]
                 vkCreateFence inFlightFences[i]
@@ -247,8 +260,11 @@ struct HelloTriangleApplication
     cleanup
         cleanupSwapChain
 
-        vkDestroyImage
-        vkFreeMemory
+        vkDestroySampler textureSampler
+        vkDestroyImageView textureImageView
+
+        vkDestroyImage textureImage
+        vkFreeMemory textureImageMemory
 
         vkDestroyPipeline
         vkDestroyPipelineLayout
@@ -268,7 +284,7 @@ struct HelloTriangleApplication
         vkDestroyBuffer vertexBuffer
         vkFreeMemory vertexBufferMemory
 
-        for i = 0; while i < MAX_FRAMES_IN_FLIGHT
+        for i = 0; i < MAX_FRAMES_IN_FLIGHT
             vkDestroySemaphore renderFinishedSemaphoresj[i]
             vkDestroySemaphore imageAvailableSemaphores[i]
             vkDestroyFence inFlightFences[i]
@@ -293,7 +309,7 @@ struct HelloTriangleApplication
             vkDestroyFramebuffer
 
         for imageView in swapChainImageViews
-            vkDestroyImageView
+            vkDestroyImageView imageView
 
         vkDestroySwapchainKHR
 
@@ -316,6 +332,9 @@ struct HelloTriangleApplication
         vkGetImageMemoryRequirements
         vkAllocateMemory
         vkBindImageMemory
+
+    createImageView // returns imageView
+        vkCreateImageView
 
     createBuffer
         findQueueFamilies
