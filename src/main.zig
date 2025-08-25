@@ -3,6 +3,7 @@ const c = @cImport({
     @cInclude("GLFW/glfw3.h");
 
     @cInclude("cglm/cglm.h");
+
     @cInclude("stb_image.h");
 });
 
@@ -80,7 +81,7 @@ const SwapChainSupportDetails = struct {
 };
 
 const Vertex = struct {
-    pos:      c.vec2,
+    pos:      c.vec3,
     color:    c.vec3,
     texCoord: c.vec2,
 
@@ -99,7 +100,7 @@ const Vertex = struct {
             .{
                 .binding  = 0,
                 .location = 0,
-                .format   = c.VK_FORMAT_R32G32_SFLOAT,
+                .format   = c.VK_FORMAT_R32G32B32_SFLOAT,
                 .offset   = @offsetOf(@This(), "pos"),
             },
             .{
@@ -121,14 +122,20 @@ const Vertex = struct {
 };
 
 const vertices = [_]Vertex{
-    .{.pos = .{-0.5, -0.5}, .color = .{1.0, 0.0, 0.0}, .texCoord = .{1.0, 0.0}},
-    .{.pos = .{ 0.5, -0.5}, .color = .{0.0, 1.0, 0.0}, .texCoord = .{0.0, 0.0}},
-    .{.pos = .{ 0.5,  0.5}, .color = .{0.0, 0.0, 1.0}, .texCoord = .{0.0, 1.0}},
-    .{.pos = .{-0.5,  0.5}, .color = .{1.0, 1.0, 1.0}, .texCoord = .{1.0, 1.0}},
+    .{.pos = .{-0.5, -0.5, 0.0}, .color = .{1.0, 0.0, 0.0}, .texCoord = .{1.0, 0.0}},
+    .{.pos = .{ 0.5, -0.5, 0.0}, .color = .{0.0, 1.0, 0.0}, .texCoord = .{0.0, 0.0}},
+    .{.pos = .{ 0.5,  0.5, 0.0}, .color = .{0.0, 0.0, 1.0}, .texCoord = .{0.0, 1.0}},
+    .{.pos = .{-0.5,  0.5, 0.0}, .color = .{1.0, 1.0, 1.0}, .texCoord = .{1.0, 1.0}},
+
+    .{.pos = .{-0.5, -0.5, -0.5}, .color = .{1.0, 0.0, 0.0}, .texCoord = .{1.0, 0.0}},
+    .{.pos = .{ 0.5, -0.5, -0.5}, .color = .{0.0, 1.0, 0.0}, .texCoord = .{0.0, 0.0}},
+    .{.pos = .{ 0.5,  0.5, -0.5}, .color = .{0.0, 0.0, 1.0}, .texCoord = .{0.0, 1.0}},
+    .{.pos = .{-0.5,  0.5, -0.5}, .color = .{1.0, 1.0, 1.0}, .texCoord = .{1.0, 1.0}},
 };
 
 const indices = [_]u16{
-    0, 1, 2, 2, 3, 0
+    0, 1, 2, 2, 3, 0,
+    4, 5, 6, 6, 7, 4,
 };
 
 const UniformBufferObject  = struct {
@@ -161,6 +168,10 @@ const HelloTriangleApplication = struct {
     descriptorSetLayout: c.VkDescriptorSetLayout = undefined,
     pipelineLayout:      c.VkPipelineLayout      = undefined,
     graphicsPipeline:    c.VkPipeline            = undefined,
+
+    depthImage:       c.VkImage        = undefined,
+    depthImageMemory: c.VkDeviceMemory = undefined,
+    depthImageView:   c.VkImageView    = undefined,
 
     swapChainFramebuffers: []c.VkFramebuffer = undefined,
 
@@ -234,8 +245,9 @@ const HelloTriangleApplication = struct {
         try self.createRenderPass();
         try self.createDescriptorSetLayout();
         try self.createGraphicsPipeline();
+        try self.createCommandPool();
+        try self.createDepthResources();
         try self.createFramebuffers();
-        try self.createCommandPools();
         try self.createTextureImage();
         try self.createTextureImageView();
         try self.createTextureSampler();
@@ -309,6 +321,10 @@ const HelloTriangleApplication = struct {
     }
 
     fn cleanupSwapChain(self: *HelloTriangleApplication) void {
+        c.vkDestroyImageView(self.device, self.depthImageView, null);
+        c.vkDestroyImage(self.device, self.depthImage, null);
+        c.vkFreeMemory(self.device, self.depthImageMemory, null);
+
         for (self.swapChainFramebuffers) |framebuffer| {
             c.vkDestroyFramebuffer(self.device, framebuffer, null);
         }
@@ -337,6 +353,7 @@ const HelloTriangleApplication = struct {
 
         try self.createSwapChain();
         try self.createImageViews();
+        try self.createDepthResources();
         try self.createFramebuffers();
     }
 
@@ -527,7 +544,7 @@ const HelloTriangleApplication = struct {
         self.swapChainImageViews = try self.allocator.alloc(c.VkImageView, self.swapChainImages.len);
 
         for (0..self.swapChainImages.len) |i| {
-            self.swapChainImageViews[i] = try self.createImageView(self.swapChainImages[i], self.swapChainImageFormat);
+            self.swapChainImageViews[i] = try self.createImageView(self.swapChainImages[i], self.swapChainImageFormat, c.VK_IMAGE_ASPECT_COLOR_BIT);
         }
     }
 
@@ -543,30 +560,50 @@ const HelloTriangleApplication = struct {
             .finalLayout    = c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
         };
 
+        const depthAttachment: c.VkAttachmentDescription = .{
+            .format         = try self.findDepthFormat(),
+            .samples        = c.VK_SAMPLE_COUNT_1_BIT,
+            .loadOp         = c.VK_ATTACHMENT_LOAD_OP_CLEAR,
+            // NOTE: Depth data will not be used after drawing so we don't have to store it. According to the tutorial,
+            // storing it will allow the hardware to perform additional optimizations (2025-08-25)
+            .storeOp        = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .stencilLoadOp  = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .initialLayout  = c.VK_IMAGE_LAYOUT_UNDEFINED,
+            .finalLayout    = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        };
+
         const colorAttachmentRef: c.VkAttachmentReference = .{
             .attachment = 0,
             .layout     = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         };
 
+        const depthAttachmentRef: c.VkAttachmentReference = .{
+            .attachment = 1,
+            .layout     = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        };
+
         const subpass: c.VkSubpassDescription = .{
-            .pipelineBindPoint    = c.VK_PIPELINE_BIND_POINT_GRAPHICS,
-            .colorAttachmentCount = 1,
-            .pColorAttachments    = &colorAttachmentRef,
+            .pipelineBindPoint       = c.VK_PIPELINE_BIND_POINT_GRAPHICS,
+            .colorAttachmentCount    = 1,
+            .pColorAttachments       = &colorAttachmentRef,
+            .pDepthStencilAttachment = &depthAttachmentRef,
         };
 
         const dependency: c.VkSubpassDependency = .{
             .srcSubpass    = c.VK_SUBPASS_EXTERNAL,
             .dstSubpass    = 0,
-            .srcStageMask  = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-            .srcAccessMask = 0,
-            .dstStageMask  = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-            .dstAccessMask = c.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            .srcStageMask  = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | c.VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+            .srcAccessMask = c.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            .dstStageMask  = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | c.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+            .dstAccessMask = c.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | c.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
         };
 
+        const attachments = [_]c.VkAttachmentDescription{ colorAttachment, depthAttachment };
         const renderPassInfo: c.VkRenderPassCreateInfo = .{
             .sType           = c.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-            .attachmentCount = 1,
-            .pAttachments    = &colorAttachment,
+            .attachmentCount = attachments.len,
+            .pAttachments    = &attachments,
             .subpassCount    = 1,
             .pSubpasses      = &subpass,
             .dependencyCount = 1,
@@ -670,6 +707,15 @@ const HelloTriangleApplication = struct {
             .rasterizationSamples = c.VK_SAMPLE_COUNT_1_BIT,
         };
 
+        const depthStencil: c.VkPipelineDepthStencilStateCreateInfo = .{
+            .sType                 = c.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+            .depthTestEnable       = c.VK_TRUE,
+            .depthWriteEnable      = c.VK_TRUE,
+            .depthCompareOp        = c.VK_COMPARE_OP_LESS,
+            .depthBoundsTestEnable = c.VK_FALSE,
+            .stencilTestEnable     = c.VK_FALSE,
+        };
+
         const colorBlendAttachment: c.VkPipelineColorBlendAttachmentState = .{
             .colorWriteMask = c.VK_COLOR_COMPONENT_R_BIT | c.VK_COLOR_COMPONENT_G_BIT | c.VK_COLOR_COMPONENT_B_BIT | c.VK_COLOR_COMPONENT_A_BIT,
             .blendEnable    = c.VK_FALSE,
@@ -709,7 +755,7 @@ const HelloTriangleApplication = struct {
             .pViewportState      = &viewportState,
             .pRasterizationState = &rasterizer,
             .pMultisampleState   = &multisampling,
-            .pDepthStencilState  = null, // Optional
+            .pDepthStencilState  = &depthStencil,
             .pColorBlendState    = &colorBlending,
             .pDynamicState       = &dynamicState,
             .layout              = self.pipelineLayout,
@@ -731,11 +777,12 @@ const HelloTriangleApplication = struct {
         self.swapChainFramebuffers = try self.allocator.alloc(c.VkFramebuffer, self.swapChainImageViews.len);
 
         for (0..self.swapChainImageViews.len) |i| {
-            const attachments = [_]c.VkImageView{ self.swapChainImageViews[i] };
+            const attachments = [_]c.VkImageView{self.swapChainImageViews[i], self.depthImageView};
+
             const frameBufferInfo: c.VkFramebufferCreateInfo = .{
                 .sType           = c.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
                 .renderPass      = self.renderPass,
-                .attachmentCount = 1,
+                .attachmentCount = attachments.len,
                 .pAttachments    = &attachments,
                 .width           = self.swapChainExtent.width,
                 .height          = self.swapChainExtent.height,
@@ -748,7 +795,7 @@ const HelloTriangleApplication = struct {
         }
     }
 
-    fn createCommandPools(self: *HelloTriangleApplication) !void {
+    fn createCommandPool(self: *HelloTriangleApplication) !void {
         const queueFamilyIndices: QueueFamilyIndices = try findQueueFamilies(self.physicalDevice, self.surface, self.allocator);
 
         const graphicsPoolInfo: c.VkCommandPoolCreateInfo = .{
@@ -770,6 +817,54 @@ const HelloTriangleApplication = struct {
         if (c.vkCreateCommandPool(self.device, &transferPoolInfo, null, &self.transferCommandPool) != c.VK_SUCCESS) {
             return error.FailedToCreateTransferCommandPool;
         }
+    }
+
+    fn createDepthResources(self: *HelloTriangleApplication) !void {
+        const depthFormat = try self.findDepthFormat();
+
+        try self.createImage(
+            self.swapChainExtent.width,
+            self.swapChainExtent.height,
+            depthFormat,
+            c.VK_IMAGE_TILING_OPTIMAL,
+            c.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+            c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            &self.depthImage,
+            &self.depthImageMemory,
+        );
+        self.depthImageView = try self.createImageView(self.depthImage, depthFormat, c.VK_IMAGE_ASPECT_DEPTH_BIT);
+    }
+
+    fn findSupportedFormat(
+        self:       *HelloTriangleApplication,
+        candidates: []const c.VkFormat,
+        tiling:     c.VkImageTiling,
+        features:   c.VkFormatFeatureFlags,
+    ) !c.VkFormat {
+        for (candidates) |format| {
+            var props: c.VkFormatProperties = undefined;
+            c.vkGetPhysicalDeviceFormatProperties(self.physicalDevice, format, &props);
+
+            if (tiling == c.VK_IMAGE_TILING_LINEAR and (props.linearTilingFeatures & features) == features) {
+                return format;
+            } else if (tiling == c.VK_IMAGE_TILING_OPTIMAL and (props.optimalTilingFeatures & features) == features) {
+                return format;
+            }
+        }
+
+        return error.FailedToFindSupportedFormat;
+    }
+
+    fn findDepthFormat(self: *HelloTriangleApplication) !c.VkFormat {
+        return try self.findSupportedFormat(
+            &.{ c.VK_FORMAT_D32_SFLOAT, c.VK_FORMAT_D32_SFLOAT_S8_UINT, c.VK_FORMAT_D24_UNORM_S8_UINT },
+            c.VK_IMAGE_TILING_OPTIMAL,
+            c.VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT,
+        );
+    }
+
+    fn hasStencilComponent(format: c.VkFormat) void {
+        return format == c.VK_FORMAT_D32_SFLOAT_S8_UINT or format == c.VK_FORMAT_D24_UNORM_S8_UINT;
     }
 
     fn createTextureImage(self: *HelloTriangleApplication) !void {
@@ -819,13 +914,14 @@ const HelloTriangleApplication = struct {
     }
 
     fn createTextureImageView(self: *HelloTriangleApplication) !void {
-        self.textureImageView = try self.createImageView(self.textureImage, c.VK_FORMAT_R8G8B8A8_SRGB);
+        self.textureImageView = try self.createImageView(self.textureImage, c.VK_FORMAT_R8G8B8A8_SRGB, c.VK_IMAGE_ASPECT_COLOR_BIT);
     }
 
     fn createImageView(
-        self:   *HelloTriangleApplication,
-        image:  c.VkImage,
-        format: c.VkFormat,
+        self:        *HelloTriangleApplication,
+        image:       c.VkImage,
+        format:      c.VkFormat,
+        aspectFlags: c.VkImageAspectFlags,
     ) !c.VkImageView {
         const viewInfo: c.VkImageViewCreateInfo = .{
             .sType            = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
@@ -833,7 +929,7 @@ const HelloTriangleApplication = struct {
             .viewType         = c.VK_IMAGE_VIEW_TYPE_2D,
             .format           = format,
             .subresourceRange = .{
-                .aspectMask     = c.VK_IMAGE_ASPECT_COLOR_BIT,
+                .aspectMask     = aspectFlags,
                 .baseMipLevel   = 0,
                 .levelCount     = 1,
                 .baseArrayLayer = 0,
@@ -1260,7 +1356,10 @@ const HelloTriangleApplication = struct {
             return error.FailedToBeginRecordingFramebuffer;
         }
 
-        const clearColor:     c.VkClearValue          = .{ .color = .{ .float32 = .{ 0.0, 0.0, 0.0, 1.0 } } };
+        const clearValues = [_]c.VkClearValue{
+            .{.color = .{ .float32 = .{0.0, 0.0, 0.0, 1.0} }},
+            .{.depthStencil = .{ .depth = 1.0, .stencil = 0}},
+        };
         const renderPassInfo: c.VkRenderPassBeginInfo = .{
             .sType           = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
             .renderPass      = self.renderPass,
@@ -1269,9 +1368,10 @@ const HelloTriangleApplication = struct {
                 .offset = .{ .x = 0, .y = 0 },
                 .extent = self.swapChainExtent,
             },
-            .clearValueCount = 1,
-            .pClearValues    = &clearColor,
+            .clearValueCount = clearValues.len,
+            .pClearValues    = &clearValues,
         };
+
 
         c.vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, c.VK_SUBPASS_CONTENTS_INLINE);
 

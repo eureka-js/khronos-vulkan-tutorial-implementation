@@ -38,6 +38,10 @@ struct HelloTriangleApplication
     pipelineLayout:      VkPipelineLayout
     graphicsPipeline:    VkPipeline
 
+    depthImage:       VkImage
+    depthImageMemory: VkDeviceMemory
+    depthImageView:   VkImageView
+
     swapChainFramebuffers: []VkFrameBuffer
 
     commandPool:    VkCommandPool
@@ -152,6 +156,11 @@ struct HelloTriangleApplication
 
         createCommandPool
             vkCreateCommandPool
+
+        createDepthResources
+            findDepthFormat
+            createImage
+            createImageView
 
         createTextureImage
             stbi_load
@@ -305,6 +314,10 @@ struct HelloTriangleApplication
         glfwTerminate
 
     cleanupSwapChain
+        vkDestroyImageView depthImageView
+        vkDestroyImage depthImage
+        vkFreeMemory depthImageMemory
+
         for framebuffer in swapChainFramebuffers
             vkDestroyFramebuffer
 
@@ -325,6 +338,7 @@ struct HelloTriangleApplication
 
         createSwapChain
         createImageViews
+        createDepthResources
         createFramebuffers
 
     createImage
@@ -379,3 +393,10 @@ struct HelloTriangleApplication
 
     findMemoryType
         vkGetPhysicalDeviceMemoryProperties
+
+    findSupportedFormat candidates
+        for format in candidates
+            vkGetPhysicalDeviceFormatProperties
+
+    findDepthFormat
+        return findSupportedFormat
