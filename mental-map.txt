@@ -52,6 +52,8 @@ struct HelloTriangleApplication
     textureImageView:   VkImageView
     textureSampler:     VkSampler
 
+    vertices:           ArrayList(Vertex)
+    indices:            ArrayList(u32)
     vertexBuffer:       VkBuffer
     indexBuffer:        VkBuffer
     vertexBufferMemory: VkDeviceMemory
@@ -182,6 +184,11 @@ struct HelloTriangleApplication
             vkGetPhysicalDeviceProperties
             vkCreateSampler textureSampler
 
+        loadModel
+            tinyobj_parse_obj
+            vertices = // Add all unique vertices
+            indices = // Add indices for all unique vertices
+
         createVertexBuffer
             createBuffer stagingBuffer stagingBufferMemory
             vkMapMemory stagingBufferMemory
@@ -267,6 +274,9 @@ struct HelloTriangleApplication
         vkDeviceWaitIdle
 
     cleanup
+        vertices.deinit
+        indices.deinit
+
         cleanupSwapChain
 
         vkDestroySampler textureSampler

@@ -27,7 +27,6 @@ pub fn build(b: *std.Build) void {
     //NOTE: Will have to use local (non system) libraries because I will have to
     //comment out SIMD related functions with corresponding preprocessor directives
     //that cause linkage errors (Zig bug due to it being unfinished?), and use plain c ones. (2025-06-21)
-
     const cglmLib = b.addLibrary(.{
         .name        = "cglm",
         .root_module = b.createModule(.{
@@ -42,13 +41,12 @@ pub fn build(b: *std.Build) void {
             "libs/cglm/src/vec3.c",
             "libs/cglm/src/mat4.c",
         },
-        .flags = &.{},
     });
     cglmLib.linkLibC();
     exe.linkLibrary(cglmLib);
 
     const stbLib = b.addLibrary(.{
-        .name       = "stb",
+        .name        = "stb",
         .root_module = b.createModule(.{
             .target   = target,
             .optimize = optimize,
@@ -65,4 +63,23 @@ pub fn build(b: *std.Build) void {
     });
     stbLib.linkLibC();
     exe.linkLibrary(stbLib);
+
+    const tinyObjLoaderLib = b.addLibrary(.{
+        .name        = "tinyObjLoader",
+        .root_module = b.createModule(.{
+            .target   = target,
+            .optimize = optimize,
+        }),
+    });
+    tinyObjLoaderLib.installHeadersDirectory(b.path("libs/tinyobjloader-c/"), ".", .{});
+    tinyObjLoaderLib.addIncludePath(b.path("libs/tinyobjloader-c/"));
+    tinyObjLoaderLib.addCSourceFile(.{
+        .file = b.addWriteFiles().add(
+            "tiny_obj_loader_c.c",
+            \\#define TINYOBJ_LOADER_C_IMPLEMENTATION
+            \\#include <tiny_obj_loader_c.h>
+        )
+    });
+    tinyObjLoaderLib.linkLibC();
+    exe.linkLibrary(tinyObjLoaderLib);
 }
