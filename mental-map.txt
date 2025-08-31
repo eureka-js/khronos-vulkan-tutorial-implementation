@@ -47,6 +47,7 @@ struct HelloTriangleApplication
     commandPool:    VkCommandPool
     commandBuffers: [MAX_FRAMES_IN_FLIGHT]VkCommandBuffer
 
+    mipLevels:          u32
     textureImage:       VkImage
     textureImageMemory: VkDeviceMemory
     textureImageView:   VkImageView
@@ -173,7 +174,7 @@ struct HelloTriangleApplication
             createImage
             transitionImageLayout
             copyBufferToImage
-            transitionImageLayout
+            generateMipmaps // if not using mipmaps: transitionImageLayout
             vkDestroyBuffer
             vkFreeMemory
 
@@ -390,6 +391,16 @@ struct HelloTriangleApplication
 
     transitionImageLayout
         beginSingleTimeCommands
+        vkCmdPipelineBarrier
+        endSingleTimeCommands
+
+    generateMipmaps
+        vkGetPhysicalDeviceFormatProperties
+        beginSingleTimeCommands
+        for i = 0; i < mipLevels
+            vkCmdPipelineBarrier
+            vkCmdBlitImage
+            vkCmdPipelineBarrier
         vkCmdPipelineBarrier
         endSingleTimeCommands
 

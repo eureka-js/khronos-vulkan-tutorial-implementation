@@ -127,6 +127,7 @@ const HelloTriangleApplication = struct {
     graphicsCommandBuffers: [MAX_FRAMES_IN_FLIGHT]vk.VkCommandBuffer = undefined,
     transferCommandBuffers: [MAX_FRAMES_IN_FLIGHT]vk.VkCommandBuffer = undefined,
 
+    mipLevels:          u32               = undefined,
     textureImage:       vk.VkImage        = undefined,
     textureImageMemory: vk.VkDeviceMemory = undefined,
     textureImageView:   vk.VkImageView    = undefined,
@@ -497,7 +498,7 @@ const HelloTriangleApplication = struct {
         self.swapChainImageViews = try self.allocator.alloc(vk.VkImageView, self.swapChainImages.len);
 
         for (0..self.swapChainImages.len) |i| {
-            self.swapChainImageViews[i] = try self.createImageView(self.swapChainImages[i], self.swapChainImageFormat, vk.VK_IMAGE_ASPECT_COLOR_BIT);
+            self.swapChainImageViews[i] = try self.createImageView(self.swapChainImages[i], self.swapChainImageFormat, vk.VK_IMAGE_ASPECT_COLOR_BIT, 1);
         }
     }
 
@@ -778,6 +779,7 @@ const HelloTriangleApplication = struct {
         try self.createImage(
             self.swapChainExtent.width,
             self.swapChainExtent.height,
+            1,
             depthFormat,
             vk.VK_IMAGE_TILING_OPTIMAL,
             vk.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
@@ -785,7 +787,7 @@ const HelloTriangleApplication = struct {
             &self.depthImage,
             &self.depthImageMemory,
         );
-        self.depthImageView = try self.createImageView(self.depthImage, depthFormat, vk.VK_IMAGE_ASPECT_DEPTH_BIT);
+        self.depthImageView = try self.createImageView(self.depthImage, depthFormat, vk.VK_IMAGE_ASPECT_DEPTH_BIT, 1);
     }
 
     fn findSupportedFormat(
@@ -827,6 +829,7 @@ const HelloTriangleApplication = struct {
         const pixels:    ?*c.stbi_uc    = c.stbi_load(TEXTURE_PATH, &texWidth, &texHeight, &texChannels, c.STBI_rgb_alpha);
         defer c.stbi_image_free(pixels);
         const imageSize: vk.VkDeviceSize = @intCast(texWidth * texHeight * 4);
+        self.mipLevels = std.math.log2(@as(u32, @intCast(@max(texWidth, texHeight)))) + 1;
 
         if (pixels == null) {
             return error.FailedToLoadTextureImage;
@@ -850,24 +853,144 @@ const HelloTriangleApplication = struct {
         try self.createImage(
             @intCast(texWidth),
             @intCast(texHeight),
+            self.mipLevels,
             vk.VK_FORMAT_R8G8B8A8_SRGB,
             vk.VK_IMAGE_TILING_OPTIMAL,
-            vk.VK_IMAGE_USAGE_TRANSFER_DST_BIT | vk.VK_IMAGE_USAGE_SAMPLED_BIT,
+            vk.VK_IMAGE_USAGE_TRANSFER_SRC_BIT | vk.VK_IMAGE_USAGE_TRANSFER_DST_BIT | vk.VK_IMAGE_USAGE_SAMPLED_BIT,
             vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             &self.textureImage,
             &self.textureImageMemory,
         );
 
-        try self.transitionImageLayout(self.textureImage, vk.VK_FORMAT_R8G8B8A8_SRGB, vk.VK_IMAGE_LAYOUT_UNDEFINED, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        try self.transitionImageLayout(self.textureImage, vk.VK_IMAGE_LAYOUT_UNDEFINED, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, self.mipLevels);
         try self.copyBufferToImage(stagingBuffer, self.textureImage, @intCast(texWidth), @intCast(texHeight));
-        try self.transitionImageLayout(self.textureImage, vk.VK_FORMAT_R8G8B8A8_SRGB, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        try self.generateMipmaps(self.textureImage, vk.VK_FORMAT_R8G8B8A8_SRGB, @intCast(texWidth), @intCast(texHeight), self.mipLevels);
 
         vk.vkDestroyBuffer(self.device, stagingBuffer, null);
         vk.vkFreeMemory(self.device, stagingBufferMemory, null);
     }
 
+    fn generateMipmaps(
+        self:        *HelloTriangleApplication,
+        image:       vk.VkImage,
+        imageFormat: vk.VkFormat,
+        width:       u32,
+        height:      u32,
+        mipLevels:   u32,
+    ) !void {
+        // IMPORTANT: Generating mipmaps at runtime, even on the GPU, is not advised to use in production.
+        // It's better to pregenerate it and load it with the base texture. (2025-08-31)
+
+        var formatProperties: vk.VkFormatProperties = undefined;
+        vk.vkGetPhysicalDeviceFormatProperties(self.physicalDevice, imageFormat, &formatProperties);
+        if((formatProperties.optimalTilingFeatures & vk.VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) == 0) {
+            return error.TextureImageFormatDoesNotSupportLinearBlitting;
+        }
+
+        const commandBuffer = try self.beginSingleTimeCommands(self.graphicsCommandPool);
+
+        var barrier: vk.VkImageMemoryBarrier = .{
+            .sType               = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .image               = image,
+            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .subresourceRange    = .{
+                .aspectMask     = vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseArrayLayer = 0,
+                .layerCount     = 1,
+                .levelCount     = 1,
+            },
+        };
+
+        var mipWidth:  i32 = @intCast(width);
+        var mipHeight: i32 = @intCast(height);
+
+        for (1..mipLevels) |i| {
+            barrier.subresourceRange.baseMipLevel = @intCast(i - 1);
+            barrier.oldLayout                     = vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.newLayout                     = vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            barrier.srcAccessMask                 = vk.VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask                 = vk.VK_ACCESS_TRANSFER_READ_BIT;
+
+            vk.vkCmdPipelineBarrier(
+                commandBuffer,
+                vk.VK_PIPELINE_STAGE_TRANSFER_BIT, vk.VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                0, null,
+                0, null,
+                1, &barrier,
+            );
+
+            const blit: vk.VkImageBlit = .{
+                .srcOffsets     = .{
+                    .{.x = 0,        .y = 0,         .z = 0},
+                    .{.x = mipWidth, .y = mipHeight, .z = 1},
+                },
+                .srcSubresource = .{
+                    .aspectMask     = vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                    .mipLevel       = @intCast(i - 1),
+                    .baseArrayLayer = 0,
+                    .layerCount     = 1,
+                },
+                .dstOffsets     = .{
+                    .{.x = 0, .y = 0, .z = 0},
+                    .{
+                        .x = if (mipWidth > 1)  @divTrunc(mipWidth, 2)  else 1,
+                        .y = if (mipHeight > 1) @divTrunc(mipHeight, 2) else 1,
+                        .z = 1,
+                    },
+                },
+                .dstSubresource = .{
+                    .aspectMask     = vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                    .mipLevel       = @intCast(i),
+                    .baseArrayLayer = 0,
+                    .layerCount     = 1,
+                },
+            };
+
+            vk.vkCmdBlitImage(
+                commandBuffer,
+                image, vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                image, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                1, &blit,
+                vk.VK_FILTER_LINEAR,
+            );
+
+            barrier.oldLayout     = vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            barrier.newLayout     = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            barrier.srcAccessMask = vk.VK_ACCESS_TRANSFER_READ_BIT;
+            barrier.dstAccessMask = vk.VK_ACCESS_SHADER_READ_BIT;
+
+            vk.vkCmdPipelineBarrier(
+                commandBuffer,
+                vk.VK_PIPELINE_STAGE_TRANSFER_BIT, vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                0, null,
+                0, null,
+                1, &barrier,
+            );
+
+            if (mipWidth  > 1) mipWidth  = @divTrunc(mipWidth, 2);
+            if (mipHeight > 1) mipHeight = @divTrunc(mipHeight, 2);
+        }
+
+        barrier.subresourceRange.baseMipLevel = mipLevels - 1;
+        barrier.oldLayout                     = vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.newLayout                     = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.srcAccessMask                 = vk.VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask                 = vk.VK_ACCESS_SHADER_READ_BIT;
+
+        vk.vkCmdPipelineBarrier(
+            commandBuffer,
+            vk.VK_PIPELINE_STAGE_TRANSFER_BIT, vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+            0, null,
+            0, null,
+            1, &barrier,
+        );
+
+        try self.endSingleTimeCommands(self.graphicsCommandPool, self.graphicsQueue, commandBuffer);
+    }
+
     fn createTextureImageView(self: *HelloTriangleApplication) !void {
-        self.textureImageView = try self.createImageView(self.textureImage, vk.VK_FORMAT_R8G8B8A8_SRGB, vk.VK_IMAGE_ASPECT_COLOR_BIT);
+        self.textureImageView = try self.createImageView(self.textureImage, vk.VK_FORMAT_R8G8B8A8_SRGB, vk.VK_IMAGE_ASPECT_COLOR_BIT, self.mipLevels);
     }
 
     fn createImageView(
@@ -875,6 +998,7 @@ const HelloTriangleApplication = struct {
         image:       vk.VkImage,
         format:      vk.VkFormat,
         aspectFlags: vk.VkImageAspectFlags,
+        mipLevels:   u32,
     ) !vk.VkImageView {
         const viewInfo: vk.VkImageViewCreateInfo = .{
             .sType            = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
@@ -884,7 +1008,7 @@ const HelloTriangleApplication = struct {
             .subresourceRange = .{
                 .aspectMask     = aspectFlags,
                 .baseMipLevel   = 0,
-                .levelCount     = 1,
+                .levelCount     = mipLevels,
                 .baseArrayLayer = 0,
                 .layerCount     = 1
             },
@@ -918,6 +1042,9 @@ const HelloTriangleApplication = struct {
             .compareEnable           = vk.VK_FALSE,
             .compareOp               = vk.VK_COMPARE_OP_ALWAYS,
             .mipmapMode              = vk.VK_SAMPLER_MIPMAP_MODE_LINEAR,
+            .minLod                  = 0.0,
+            .maxLod                  = vk.VK_LOD_CLAMP_NONE,
+            .mipLodBias              = 0.0,
         };
 
         if (vk.vkCreateSampler(self.device, &samplerInfo, null, &self.textureSampler) != vk.VK_SUCCESS) {
@@ -1131,6 +1258,7 @@ const HelloTriangleApplication = struct {
         self:        *HelloTriangleApplication,
         width:       u32,
         height:      u32,
+        mipLevels:   u32,
         format:      vk.VkFormat,
         tiling:      vk.VkImageTiling,
         usage:       vk.VkImageUsageFlags,
@@ -1146,7 +1274,7 @@ const HelloTriangleApplication = struct {
                 .height = height,
                 .depth  = 1,
             },
-            .mipLevels     = 1,
+            .mipLevels     = mipLevels,
             .arrayLayers   = 1,
             .format        = format,
             .tiling        = tiling,
@@ -1408,12 +1536,10 @@ const HelloTriangleApplication = struct {
     fn transitionImageLayout(
         self:      *HelloTriangleApplication,
         image:     vk.VkImage,
-        format:    vk.VkFormat,
         oldLayout: vk.VkImageLayout,
         newLayout: vk.VkImageLayout,
+        mipLevels: u32,
     ) !void {
-        _ = format;
-
         const commandBuffer: vk.VkCommandBuffer = try self.beginSingleTimeCommands(self.graphicsCommandPool);
 
         var barrier: vk.VkImageMemoryBarrier = .{
@@ -1426,7 +1552,7 @@ const HelloTriangleApplication = struct {
             .subresourceRange    = .{
                 .aspectMask     = vk.VK_IMAGE_ASPECT_COLOR_BIT,
                 .baseMipLevel   = 0,
-                .levelCount     = 1,
+                .levelCount     = mipLevels,
                 .baseArrayLayer = 0,
                 .layerCount     = 1,
             },
@@ -1677,12 +1803,11 @@ const HelloTriangleApplication = struct {
         defer allocator.free(queueFamilies);
         vk.vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.ptr);
         for (queueFamilies, 0..) |queueFamily, i| {
-            // NOTE: The same queue family used for both drawing and presentation
-            // would yield improved performance compared to this loop implementation
-            // (even though it can happen in this implementation that the same queue family
-            // gets selected for both). (2025-04-19)
-            // IMPORTANT: There is no fallback for when the transfer queue family is not found
-            // because the tutorial task requires a strictly transfer-only queue family (2025-06-04)
+            // NOTE: The same queue family used for both drawing and presentation would yield improved performance
+            // compared to this loop implementation (even though it can happen in this implementation
+            // that the same queue family gets selected for both). (2025-04-19)
+            // IMPORTANT: There is no fallback for when the transfer queue family is not found for familyIndices.transferFamily
+            // because the tutorial task requires that transfer and graphics commands don't use the same queue family. (2025-06-04)
 
             if ((queueFamily.queueFlags & vk.VK_QUEUE_GRAPHICS_BIT) != 0) {
                 familyIndices.graphicsFamily = @intCast(i);
