@@ -27,6 +27,7 @@ struct HelloTriangleApplication
     debugMessenger: VkDebugUtilsMessengerEXT
 
     physicalDevice: VkPhysicalDevice
+    msaaSamples:    VkSampleCountFlagBits
     device:         VkDevice
 
     graphicsQueue: VkQueue
@@ -37,6 +38,10 @@ struct HelloTriangleApplication
     descriptorSetLayout: VkDescriptorSetLayout
     pipelineLayout:      VkPipelineLayout
     graphicsPipeline:    VkPipeline
+
+    colorImage:       VkImage
+    colorImageMemory: VkDeviceMemory
+    colorImageView:   vkImageView
 
     depthImage:       VkImage
     depthImageMemory: VkDeviceMemory
@@ -105,15 +110,11 @@ struct HelloTriangleApplication
 
         pickPhysicalDevice
             vkEnumeratePhysicalDevices
-            isDeviceSuitable
-                findQueueFamilies
-                checkDeviceExtensionSupport
-                    vkEnumerateDeviceExtensionProperties
-                querySwapChainSupport
-                    vkGetPhysicalDeviceSurfaceCapabilitiesKHR
-                    vkGetPhysicalDeviceSurfaceFormatsKHR
-                    vkGetPhysicalDeviceSurfacePresentModesKHR
-                vkGetPhysicalDeviceFeatures
+            for device in devices
+                if isDeviceSuitable
+                    physicalDevice = device
+                    maaSamples = getMaxUsableSampleCount
+                    break
 
         createLogicalDevice
             findQueueFamilies
@@ -159,6 +160,10 @@ struct HelloTriangleApplication
 
         createCommandPool
             vkCreateCommandPool
+
+        createColorResoruces
+            createImage
+            createImageView
 
         createDepthResources
             findDepthFormat
@@ -325,6 +330,10 @@ struct HelloTriangleApplication
         glfwTerminate
 
     cleanupSwapChain
+        vkDestroyImageView colorImageView
+        vkDestroyImage colorImage
+        vkFreeMemory colorImageMemory
+
         vkDestroyImageView depthImageView
         vkDestroyImage depthImage
         vkFreeMemory depthImageMemory
@@ -349,6 +358,7 @@ struct HelloTriangleApplication
 
         createSwapChain
         createImageViews
+        createColorResources
         createDepthResources
         createFramebuffers
 
@@ -404,6 +414,9 @@ struct HelloTriangleApplication
         vkCmdPipelineBarrier
         endSingleTimeCommands
 
+    getMaxUsableSampleCount
+        vkGetPhysicalDeviceProperties
+
     updateUniformBuffer currentImage
         ubo: UniformBufferObject = // custom transform
         uniformBufferMapped[currentImage].* = ubo
@@ -421,3 +434,13 @@ struct HelloTriangleApplication
 
     findDepthFormat
         return findSupportedFormat
+
+    isDeviceSuitable
+        findQueueFamilies
+        checkDeviceExtensionSupport
+            vkEnumerateDeviceExtensionProperties
+        querySwapChainSupport
+            vkGetPhysicalDeviceSurfaceCapabilitiesKHR
+            vkGetPhysicalDeviceSurfaceFormatsKHR
+            vkGetPhysicalDeviceSurfacePresentModesKHR
+        vkGetPhysicalDeviceFeatures

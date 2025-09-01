@@ -104,8 +104,9 @@ const HelloTriangleApplication = struct {
     instance:       vk.VkInstance               = undefined,
     debugMessenger: vk.VkDebugUtilsMessengerEXT = undefined,
 
-    physicalDevice: vk.VkPhysicalDevice = @ptrCast(vk.VK_NULL_HANDLE),
-    device:         vk.VkDevice         = undefined,
+    physicalDevice: vk.VkPhysicalDevice      = @ptrCast(vk.VK_NULL_HANDLE),
+    msaaSamples:    vk.VkSampleCountFlagBits = vk.VK_SAMPLE_COUNT_1_BIT,
+    device:         vk.VkDevice              = undefined,
 
     graphicsQueue:  vk.VkQueue = undefined,
     presentQueue:   vk.VkQueue = undefined,
@@ -115,6 +116,10 @@ const HelloTriangleApplication = struct {
     descriptorSetLayout: vk.VkDescriptorSetLayout = undefined,
     pipelineLayout:      vk.VkPipelineLayout      = undefined,
     graphicsPipeline:    vk.VkPipeline            = undefined,
+
+    colorImage:       vk.VkImage        = undefined,
+    colorImageMemory: vk.VkDeviceMemory = undefined,
+    colorImageView:   vk.VkImageView    = undefined,
 
     depthImage:       vk.VkImage        = undefined,
     depthImageMemory: vk.VkDeviceMemory = undefined,
@@ -196,6 +201,7 @@ const HelloTriangleApplication = struct {
         try self.createDescriptorSetLayout();
         try self.createGraphicsPipeline();
         try self.createCommandPool();
+        try self.createColorResources();
         try self.createDepthResources();
         try self.createFramebuffers();
         try self.createTextureImage();
@@ -275,6 +281,10 @@ const HelloTriangleApplication = struct {
     }
 
     fn cleanupSwapChain(self: *HelloTriangleApplication) void {
+        vk.vkDestroyImageView(self.device, self.colorImageView, null);
+        vk.vkDestroyImage(self.device, self.colorImage, null);
+        vk.vkFreeMemory(self.device, self.colorImageMemory, null);
+
         vk.vkDestroyImageView(self.device, self.depthImageView, null);
         vk.vkDestroyImage(self.device, self.depthImage, null);
         vk.vkFreeMemory(self.device, self.depthImageMemory, null);
@@ -307,6 +317,7 @@ const HelloTriangleApplication = struct {
 
         try self.createSwapChain();
         try self.createImageViews();
+        try self.createColorResources();
         try self.createDepthResources();
         try self.createFramebuffers();
     }
@@ -390,6 +401,7 @@ const HelloTriangleApplication = struct {
         for (devices) |device| {
             if (try isDeviceSuitable(device, self.surface, self.allocator)) {
                 self.physicalDevice = device;
+                self.msaaSamples    = try self.getMaxUsableSampleCount();
                 break;
             }
         }
@@ -424,6 +436,9 @@ const HelloTriangleApplication = struct {
 
         var deviceFeatures: vk.VkPhysicalDeviceFeatures = .{
             .samplerAnisotropy = vk.VK_TRUE,
+            // Sample shading lets the fragment shader work on individual MSAA samples instead of just once per pixel.
+            // This improves shading and texture detail inside polygons at the cost of performance.
+            .sampleRateShading = vk.VK_TRUE,
         };
 
         const createInfo: vk.VkDeviceCreateInfo = .{
@@ -505,18 +520,18 @@ const HelloTriangleApplication = struct {
     fn createRenderPass(self: *HelloTriangleApplication) !void {
         const colorAttachment: vk.VkAttachmentDescription = .{
             .format         = self.swapChainImageFormat,
-            .samples        = vk.VK_SAMPLE_COUNT_1_BIT,
+            .samples        = self.msaaSamples,
             .loadOp         = vk.VK_ATTACHMENT_LOAD_OP_CLEAR,
             .storeOp        = vk.VK_ATTACHMENT_STORE_OP_STORE,
             .stencilLoadOp  = vk.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
             .stencilStoreOp = vk.VK_ATTACHMENT_STORE_OP_DONT_CARE,
             .initialLayout  = vk.VK_IMAGE_LAYOUT_UNDEFINED,
-            .finalLayout    = vk.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+            .finalLayout    = vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         };
 
         const depthAttachment: vk.VkAttachmentDescription = .{
             .format         = try self.findDepthFormat(),
-            .samples        = vk.VK_SAMPLE_COUNT_1_BIT,
+            .samples        = self.msaaSamples,
             .loadOp         = vk.VK_ATTACHMENT_LOAD_OP_CLEAR,
             // NOTE: Depth data will not be used after drawing so we don't have to store it. According to the tutorial,
             // storing it will allow the hardware to perform additional optimizations (2025-08-25)
@@ -525,6 +540,17 @@ const HelloTriangleApplication = struct {
             .stencilStoreOp = vk.VK_ATTACHMENT_STORE_OP_DONT_CARE,
             .initialLayout  = vk.VK_IMAGE_LAYOUT_UNDEFINED,
             .finalLayout    = vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        };
+
+        const colorAttachmentResolve: vk.VkAttachmentDescription = .{
+            .format         = self.swapChainImageFormat,
+            .samples        = vk.VK_SAMPLE_COUNT_1_BIT,
+            .loadOp         = vk.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .storeOp        = vk.VK_ATTACHMENT_STORE_OP_STORE,
+            .stencilLoadOp  = vk.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .stencilStoreOp = vk.VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .initialLayout  = vk.VK_IMAGE_LAYOUT_UNDEFINED,
+            .finalLayout    = vk.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
         };
 
         const colorAttachmentRef: vk.VkAttachmentReference = .{
@@ -537,23 +563,29 @@ const HelloTriangleApplication = struct {
             .layout     = vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
         };
 
+        const colorAttachmentResolveRef: vk.VkAttachmentReference = .{
+            .attachment = 2,
+            .layout     = vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        };
+
         const subpass: vk.VkSubpassDescription = .{
             .pipelineBindPoint       = vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
             .colorAttachmentCount    = 1,
             .pColorAttachments       = &colorAttachmentRef,
             .pDepthStencilAttachment = &depthAttachmentRef,
+            .pResolveAttachments     = &colorAttachmentResolveRef,
         };
 
         const dependency: vk.VkSubpassDependency = .{
             .srcSubpass    = vk.VK_SUBPASS_EXTERNAL,
             .dstSubpass    = 0,
             .srcStageMask  = vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | vk.VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-            .srcAccessMask = vk.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            .srcAccessMask = vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | vk.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
             .dstStageMask  = vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | vk.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
             .dstAccessMask = vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | vk.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
         };
 
-        const attachments = [_]vk.VkAttachmentDescription{ colorAttachment, depthAttachment };
+        const attachments = [_]vk.VkAttachmentDescription{colorAttachment, depthAttachment, colorAttachmentResolve};
         const renderPassInfo: vk.VkRenderPassCreateInfo = .{
             .sType           = vk.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
             .attachmentCount = attachments.len,
@@ -657,8 +689,12 @@ const HelloTriangleApplication = struct {
 
         const multisampling: vk.VkPipelineMultisampleStateCreateInfo = .{
             .sType                = vk.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-            .sampleShadingEnable  = vk.VK_FALSE,
-            .rasterizationSamples = vk.VK_SAMPLE_COUNT_1_BIT,
+            .sampleShadingEnable  = vk.VK_TRUE,
+
+            // Sample shading lets the fragment shader work on individual MSAA samples instead of just once per pixel.
+            // This improves shading and texture detail inside polygons at the cost of performance.
+            .minSampleShading     = 0.2,
+            .rasterizationSamples = self.msaaSamples,
         };
 
         const depthStencil: vk.VkPipelineDepthStencilStateCreateInfo = .{
@@ -731,7 +767,7 @@ const HelloTriangleApplication = struct {
         self.swapChainFramebuffers = try self.allocator.alloc(vk.VkFramebuffer, self.swapChainImageViews.len);
 
         for (0..self.swapChainImageViews.len) |i| {
-            const attachments = [_]vk.VkImageView{self.swapChainImageViews[i], self.depthImageView};
+            const attachments = [_]vk.VkImageView{self.colorImageView, self.depthImageView, self.swapChainImageViews[i]};
 
             const frameBufferInfo: vk.VkFramebufferCreateInfo = .{
                 .sType           = vk.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
@@ -773,6 +809,24 @@ const HelloTriangleApplication = struct {
         }
     }
 
+    fn createColorResources(self: *HelloTriangleApplication) !void {
+        const colorFormat = self.swapChainImageFormat;
+
+        try self.createImage(
+            self.swapChainExtent.width,
+            self.swapChainExtent.height,
+            1,
+            self.msaaSamples,
+            colorFormat,
+            vk.VK_IMAGE_TILING_OPTIMAL,
+            vk.VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+            vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            &self.colorImage,
+            &self.colorImageMemory,
+        );
+        self.colorImageView = try self.createImageView(self.colorImage, colorFormat, vk.VK_IMAGE_ASPECT_COLOR_BIT, 1);
+    }
+
     fn createDepthResources(self: *HelloTriangleApplication) !void {
         const depthFormat = try self.findDepthFormat();
 
@@ -780,6 +834,7 @@ const HelloTriangleApplication = struct {
             self.swapChainExtent.width,
             self.swapChainExtent.height,
             1,
+            self.msaaSamples,
             depthFormat,
             vk.VK_IMAGE_TILING_OPTIMAL,
             vk.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
@@ -854,6 +909,7 @@ const HelloTriangleApplication = struct {
             @intCast(texWidth),
             @intCast(texHeight),
             self.mipLevels,
+            vk.VK_SAMPLE_COUNT_1_BIT,
             vk.VK_FORMAT_R8G8B8A8_SRGB,
             vk.VK_IMAGE_TILING_OPTIMAL,
             vk.VK_IMAGE_USAGE_TRANSFER_SRC_BIT | vk.VK_IMAGE_USAGE_TRANSFER_DST_BIT | vk.VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -987,6 +1043,21 @@ const HelloTriangleApplication = struct {
         );
 
         try self.endSingleTimeCommands(self.graphicsCommandPool, self.graphicsQueue, commandBuffer);
+    }
+
+    fn getMaxUsableSampleCount(self: *HelloTriangleApplication) !vk.VkSampleCountFlagBits {
+        var physicalDeviceProperties: vk.VkPhysicalDeviceProperties = undefined;
+        vk.vkGetPhysicalDeviceProperties(self.physicalDevice, &physicalDeviceProperties);
+
+        const counts = physicalDeviceProperties.limits.framebufferColorSampleCounts & physicalDeviceProperties.limits.framebufferDepthSampleCounts;
+        if      ((counts & vk.VK_SAMPLE_COUNT_64_BIT) != 0) {return vk.VK_SAMPLE_COUNT_64_BIT;}
+        else if ((counts & vk.VK_SAMPLE_COUNT_32_BIT) != 0) {return vk.VK_SAMPLE_COUNT_32_BIT;}
+        else if ((counts & vk.VK_SAMPLE_COUNT_16_BIT) != 0) {return vk.VK_SAMPLE_COUNT_16_BIT;}
+        else if ((counts & vk.VK_SAMPLE_COUNT_8_BIT)  != 0) {return vk.VK_SAMPLE_COUNT_8_BIT;}
+        else if ((counts & vk.VK_SAMPLE_COUNT_4_BIT)  != 0) {return vk.VK_SAMPLE_COUNT_4_BIT;}
+        else if ((counts & vk.VK_SAMPLE_COUNT_2_BIT)  != 0) {return vk.VK_SAMPLE_COUNT_2_BIT;}
+
+        return vk.VK_SAMPLE_COUNT_1_BIT;
     }
 
     fn createTextureImageView(self: *HelloTriangleApplication) !void {
@@ -1259,6 +1330,7 @@ const HelloTriangleApplication = struct {
         width:       u32,
         height:      u32,
         mipLevels:   u32,
+        numSamples:  vk.VkSampleCountFlagBits,
         format:      vk.VkFormat,
         tiling:      vk.VkImageTiling,
         usage:       vk.VkImageUsageFlags,
@@ -1281,7 +1353,7 @@ const HelloTriangleApplication = struct {
             .initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED,
             .usage         = usage,
             .sharingMode   = vk.VK_SHARING_MODE_EXCLUSIVE,
-            .samples       = vk.VK_SAMPLE_COUNT_1_BIT,
+            .samples       = numSamples,
             .flags         = 0,
         };
 
