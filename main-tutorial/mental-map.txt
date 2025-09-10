@@ -80,6 +80,12 @@ struct HelloTriangleApplication
 
     currentFrame: u32 = 0
 
+    run
+        initWindow
+        initVulkan
+        mainLoop
+        cleanup
+
     initWindow
         glfwInit
         glfwWindowHint
@@ -90,7 +96,7 @@ struct HelloTriangleApplication
 
     framebufferResizeCallback
         app = glfwGetWindowUserPointer
-        app.framebufferResized = true;
+        app.framebufferResized = true
 
     initVulkan
         createInstance
@@ -125,9 +131,6 @@ struct HelloTriangleApplication
 
         createSwapChain
             querySwapChainSupport
-                vkGetPhysicalDeviceSurfaceCapabilitiesKHR
-                vkGetPhysicalDeviceSurfaceFormatsKHR
-                vkGetPhysicalDeviceSurfacePresentModesKHR
             chooseSwapExtent
                 glfwGetFramebufferSize
             findQueueFamilies
@@ -145,17 +148,15 @@ struct HelloTriangleApplication
             vkCreateDescriptorSetLayout
 
         createGraphicsPipeline
-            createShaderModule
-                vkCreateShaderModule
-            createShaderModule
-                vkCreateShaderModule
+            createShaderModule // vertex
+            createShaderModule // fragment
             vkCreatePipelineLayout
             vkCreateGraphicsPipelines
             vkDestroyShaderModule
             vkDestroyShaderModule
 
         createFramebuffers
-            for swapChainImageViews
+            for i = 0; i < swapChainImageViews.len
                 vkCreateFramebuffer
 
         createCommandPool
@@ -348,7 +349,7 @@ struct HelloTriangleApplication
 
     recreateSwapChain
         glfwGetFramebufferSize width height
-        while width == 0 and height == 0
+        while width == 0 or height == 0
             glfwGetFramebufferSize width height
             glfwWaitEvents
 
@@ -376,6 +377,7 @@ struct HelloTriangleApplication
         vkCreateBuffer
         vkGetBufferMemoryRequirements
         findMemoryType
+            vkGetPhysicalDeviceMemoryProperties
         vkAllocateMemory
         vkBindBufferMemory
 
@@ -425,9 +427,6 @@ struct HelloTriangleApplication
         vkGetPhysicalDeviceQueueFamilyProperties
         vkGetPhysicalDeviceSurfaceSupportKHR
 
-    findMemoryType
-        vkGetPhysicalDeviceMemoryProperties
-
     findSupportedFormat candidates
         for format in candidates
             vkGetPhysicalDeviceFormatProperties
@@ -439,8 +438,13 @@ struct HelloTriangleApplication
         findQueueFamilies
         checkDeviceExtensionSupport
             vkEnumerateDeviceExtensionProperties
-        querySwapChainSupport
-            vkGetPhysicalDeviceSurfaceCapabilitiesKHR
-            vkGetPhysicalDeviceSurfaceFormatsKHR
-            vkGetPhysicalDeviceSurfacePresentModesKHR
         vkGetPhysicalDeviceFeatures
+        querySwapChainSupport
+
+    querySwapChainSupport
+        vkGetPhysicalDeviceSurfaceCapabilitiesKHR
+        vkGetPhysicalDeviceSurfaceFormatsKHR
+        vkGetPhysicalDeviceSurfacePresentModesKHR
+
+    createShaderModule
+        vkCreateShaderModule

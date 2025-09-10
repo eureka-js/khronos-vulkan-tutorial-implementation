@@ -58,8 +58,8 @@ glm_mul(mat4 m1, mat4 m2, mat4 dest) {
   glm_mul_wasm(m1, m2, dest);
 #elif defined(__AVX__)
   glm_mul_avx(m1, m2, dest);
-#elif defined( __SSE__ ) || defined( __SSE2__ )
-  glm_mul_sse2(m1, m2, dest);
+//#elif defined( __SSE__ ) || defined( __SSE2__ )
+//  glm_mul_sse2(m1, m2, dest);
 #elif defined(CGLM_NEON_FP)
   glm_mul_neon(m1, m2, dest);
 #else

@@ -23,17 +23,15 @@ pub const Vertex = struct {
     texCoord: cglm.vec2,
 
     pub fn getBindingDescription() vk.VkVertexInputBindingDescription {
-        const bindingDescription: vk.VkVertexInputBindingDescription = .{
+        return .{
             .binding   = 0,
             .stride    = @sizeOf(@This()),
             .inputRate = vk.VK_VERTEX_INPUT_RATE_VERTEX,
         };
-
-        return bindingDescription;
     }
 
     pub fn getAttributeDescriptions() []const vk.VkVertexInputAttributeDescription {
-        const attributeDescriptions = &[_]vk.VkVertexInputAttributeDescription{
+        return &.{
             .{
                 .binding  = 0,
                 .location = 0,
@@ -53,7 +51,5 @@ pub const Vertex = struct {
                 .offset   = @offsetOf(@This(), "texCoord"),
             },
         };
-
-        return attributeDescriptions;
     }
 };

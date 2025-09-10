@@ -49,9 +49,9 @@ fn DestroyDebugUtilsMessengerEXT(
 }
 
 const QueueFamilyIndices = struct {
-    graphicsFamily: ?u32,
-    presentFamily:  ?u32,
-    transferFamily: ?u32,
+    graphicsFamily: ?u32 = null,
+    presentFamily:  ?u32 = null,
+    transferFamily: ?u32 = null,
 
     fn isComplete(self: QueueFamilyIndices) bool {
         return self.graphicsFamily != null and self.presentFamily != null and self.transferFamily != null;
@@ -65,7 +65,7 @@ const SwapChainSupportDetails = struct {
     allocator:    *const std.mem.Allocator,
 
     fn init(allocator: *const std.mem.Allocator) !*SwapChainSupportDetails {
-        const details        = try allocator.create(SwapChainSupportDetails);
+        const details = try allocator.create(SwapChainSupportDetails);
         details.capabilities = undefined;
         details.formats      = std.ArrayList(vk.VkSurfaceFormatKHR).init(allocator.*);
         details.presentModes = std.ArrayList(vk.VkPresentModeKHR).init(allocator.*);
@@ -76,14 +76,13 @@ const SwapChainSupportDetails = struct {
 
     fn deinit(self: *SwapChainSupportDetails) void {
         self.formats.deinit();
-        self.formats      = undefined;
         self.presentModes.deinit();
+        self.formats      = undefined;
         self.presentModes = undefined;
 
         self.allocator.destroy(self);
     }
 };
-
 
 const UniformBufferObject  = struct {
     model: cglm.mat4 align(16) = undefined,
@@ -185,8 +184,8 @@ const HelloTriangleApplication = struct {
 
     fn framebufferResizeCallback(window: ?*glfw.GLFWwindow, width: c_int, height: c_int) callconv(.c) void {
         _, _ = .{width, height};
-        const app: ?*HelloTriangleApplication = @ptrCast(@alignCast(glfw.glfwGetWindowUserPointer(window)));
-        app.?.framebufferResized = true;
+        const app: *HelloTriangleApplication = @ptrCast(@alignCast(glfw.glfwGetWindowUserPointer(window)));
+        app.framebufferResized = true;
     }
 
     fn initVulkan(self: *HelloTriangleApplication) !void {
@@ -412,18 +411,18 @@ const HelloTriangleApplication = struct {
     }
 
     fn createLogicalDevice(self: *HelloTriangleApplication) !void {
-        const familyIndices: QueueFamilyIndices = try findQueueFamilies(self.physicalDevice, self.surface, self.allocator);
+        const familyIndices = try findQueueFamilies(self.physicalDevice, self.surface, self.allocator);
 
         var queueCreateInfos    = std.ArrayList(vk.VkDeviceQueueCreateInfo).init(self.allocator.*);
         defer queueCreateInfos.deinit();
+
         var uniqueQueueFamilies = std.AutoHashMap(u32, void).init(self.allocator.*);
         defer uniqueQueueFamilies.deinit();
         try uniqueQueueFamilies.put(familyIndices.graphicsFamily.?, {});
         try uniqueQueueFamilies.put(familyIndices.presentFamily.?, {});
         try uniqueQueueFamilies.put(familyIndices.transferFamily.?, {});
-
         const queuePriority: f32 = 1.0;
-        var it                   = uniqueQueueFamilies.iterator();
+        var it = uniqueQueueFamilies.iterator();
         while (it.next()) |entry| {
             const queueCreateInfo: vk.VkDeviceQueueCreateInfo = .{
                 .sType            = vk.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
@@ -440,7 +439,6 @@ const HelloTriangleApplication = struct {
             // This improves shading and texture detail inside polygons at the cost of performance.
             .sampleRateShading = vk.VK_TRUE,
         };
-
         const createInfo: vk.VkDeviceCreateInfo = .{
             .sType                   = vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
             .queueCreateInfoCount    = @intCast(queueCreateInfos.items.len),
@@ -475,30 +473,29 @@ const HelloTriangleApplication = struct {
             imageCount = swapChainSupport.capabilities.maxImageCount;
         }
 
-        var createInfo: vk.VkSwapchainCreateInfoKHR = .{};
-        createInfo.sType            = vk.VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-        createInfo.surface          = self.surface;
-        createInfo.minImageCount    = imageCount;
-        createInfo.imageFormat      = surfaceFormat.format;
-        createInfo.imageExtent      = extent;
-        createInfo.imageArrayLayers = 1;
-        createInfo.imageUsage       = vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        var createInfo: vk.VkSwapchainCreateInfoKHR = .{
+            .sType            = vk.VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+            .surface          = self.surface,
+            .minImageCount    = imageCount,
+            .imageFormat      = surfaceFormat.format,
+            .imageExtent      = extent,
+            .imageArrayLayers = 1,
+            .imageUsage       = vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+            .preTransform     = swapChainSupport.capabilities.currentTransform,
+            .compositeAlpha   = vk.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+            .presentMode      = presentMode,
+            .clipped          = vk.VK_TRUE,
+            .oldSwapchain     = @ptrCast(vk.VK_NULL_HANDLE),
+        };
 
-        const familyIndices: QueueFamilyIndices = try findQueueFamilies(self.physicalDevice, self.surface, self.allocator);
+        const familyIndices = try findQueueFamilies(self.physicalDevice, self.surface, self.allocator);
         if (familyIndices.graphicsFamily == familyIndices.presentFamily) {
-            createInfo.imageSharingMode = vk.VK_SHARING_MODE_EXCLUSIVE;
+            createInfo.imageSharingMode      = vk.VK_SHARING_MODE_EXCLUSIVE;
         } else {
-            createInfo.imageSharingMode = vk.VK_SHARING_MODE_CONCURRENT;
+            createInfo.imageSharingMode      = vk.VK_SHARING_MODE_CONCURRENT;
             createInfo.queueFamilyIndexCount = 2;
-            const queueFamilyIndices         = [_]u32{ familyIndices.graphicsFamily.?, familyIndices.presentFamily.?};
-            createInfo.pQueueFamilyIndices   = &queueFamilyIndices;
+            createInfo.pQueueFamilyIndices   = &[_]u32{ familyIndices.graphicsFamily.?, familyIndices.presentFamily.?};
         }
-
-        createInfo.preTransform   = swapChainSupport.capabilities.currentTransform;
-        createInfo.compositeAlpha = vk.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-        createInfo.presentMode    = presentMode;
-        createInfo.clipped        = vk.VK_TRUE;
-        createInfo.oldSwapchain   = @ptrCast(vk.VK_NULL_HANDLE);
 
         if (vk.vkCreateSwapchainKHR(self.device, &createInfo, null, &self.swapChain) != vk.VK_SUCCESS) {
             return error.FailedToCreateSwapChain;
@@ -637,7 +634,9 @@ const HelloTriangleApplication = struct {
         defer self.allocator.free(fragShaderCode);
 
         const vertShaderModule: vk.VkShaderModule = try self.createShaderModule(vertShaderCode);
+        defer vk.vkDestroyShaderModule(self.device, vertShaderModule, null);
         const fragShaderModule: vk.VkShaderModule = try self.createShaderModule(fragShaderCode);
+        defer vk.vkDestroyShaderModule(self.device, fragShaderModule, null);
 
         const vertShaderStageInfo: vk.VkPipelineShaderStageCreateInfo = .{
             .sType  = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -717,10 +716,7 @@ const HelloTriangleApplication = struct {
             .pAttachments    = &colorBlendAttachment,
         };
 
-        const dynamicStates = &[_]vk.VkDynamicState{
-            vk.VK_DYNAMIC_STATE_VIEWPORT,
-            vk.VK_DYNAMIC_STATE_SCISSOR,
-        };
+        const dynamicStates = &[_]vk.VkDynamicState{vk.VK_DYNAMIC_STATE_VIEWPORT, vk.VK_DYNAMIC_STATE_SCISSOR};
         const dynamicState: vk.VkPipelineDynamicStateCreateInfo = .{
             .sType             = vk.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
             .dynamicStateCount = dynamicStates.len,
@@ -758,9 +754,6 @@ const HelloTriangleApplication = struct {
         if (vk.vkCreateGraphicsPipelines(self.device, @ptrCast(vk.VK_NULL_HANDLE), 1, &pipelineInfo, null, &self.graphicsPipeline) != vk.VK_SUCCESS) {
             return error.FailedToCreateGraphicsPipeline;
         }
-
-        vk.vkDestroyShaderModule(self.device, vertShaderModule, null);
-        vk.vkDestroyShaderModule(self.device, fragShaderModule, null);
     }
 
     fn createFramebuffers(self: *HelloTriangleApplication) !void {
@@ -786,7 +779,7 @@ const HelloTriangleApplication = struct {
     }
 
     fn createCommandPool(self: *HelloTriangleApplication) !void {
-        const queueFamilyIndices: QueueFamilyIndices = try findQueueFamilies(self.physicalDevice, self.surface, self.allocator);
+        const queueFamilyIndices = try findQueueFamilies(self.physicalDevice, self.surface, self.allocator);
 
         const graphicsPoolInfo: vk.VkCommandPoolCreateInfo = .{
             .sType            = vk.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -1139,6 +1132,8 @@ const HelloTriangleApplication = struct {
             &stagingBuffer,
             &stagingBufferMemory,
         );
+        defer vk.vkDestroyBuffer(self.device, stagingBuffer, null);
+        defer vk.vkFreeMemory(self.device, stagingBufferMemory, null);
 
         var data: [*]Vertex = undefined;
         _ = vk.vkMapMemory(self.device, stagingBufferMemory, 0, bufferSize, 0, @ptrCast(&data));
@@ -1154,9 +1149,6 @@ const HelloTriangleApplication = struct {
         );
 
         self.copyBuffer(stagingBuffer, self.vertexBuffer, bufferSize);
-
-        vk.vkDestroyBuffer(self.device, stagingBuffer, null);
-        vk.vkFreeMemory(self.device, stagingBufferMemory, null);
     }
 
     fn createIndexBuffer(self: *HelloTriangleApplication) !void {
@@ -1171,6 +1163,8 @@ const HelloTriangleApplication = struct {
             &stagingBuffer,
             &stagingBufferMemory,
         );
+        defer vk.vkDestroyBuffer(self.device, stagingBuffer, null);
+        defer vk.vkFreeMemory(self.device, stagingBufferMemory, null);
 
         var data: [*]u32 = undefined;
         _ = vk.vkMapMemory(self.device, stagingBufferMemory, 0, bufferSize, 0, @ptrCast(&data));
@@ -1186,9 +1180,6 @@ const HelloTriangleApplication = struct {
         );
 
         self.copyBuffer(stagingBuffer, self.indexBuffer, bufferSize);
-
-        vk.vkDestroyBuffer(self.device, stagingBuffer, null);
-        vk.vkFreeMemory(self.device, stagingBufferMemory, null);
     }
 
     fn createUniformBuffers(self: *HelloTriangleApplication) !void {
@@ -1232,17 +1223,13 @@ const HelloTriangleApplication = struct {
     }
 
     fn createDescriptorSets(self: *HelloTriangleApplication) !void {
-        var layouts: [MAX_FRAMES_IN_FLIGHT]vk.VkDescriptorSetLayout = undefined;
-        for (0..layouts.len) |i| {
-            layouts[i] = self.descriptorSetLayout;
-        }
+        var layouts = [_]vk.VkDescriptorSetLayout{self.descriptorSetLayout} ** MAX_FRAMES_IN_FLIGHT;
         const allocInfo: vk.VkDescriptorSetAllocateInfo = .{
             .sType              = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
             .descriptorPool     = self.descriptorPool,
             .descriptorSetCount = layouts.len,
             .pSetLayouts        = &layouts,
         };
-
         if (vk.vkAllocateDescriptorSets(self.device, &allocInfo, &self.descriptorSets) != vk.VK_SUCCESS) {
             return error.FailedToAllocateDescriptorSets;
         }
@@ -1283,7 +1270,7 @@ const HelloTriangleApplication = struct {
                 },
             };
 
-            vk.vkUpdateDescriptorSets(self.device, @intCast(descriptorWrites.len), &descriptorWrites, 0, null);
+            vk.vkUpdateDescriptorSets(self.device, descriptorWrites.len, &descriptorWrites, 0, null);
         }
     }
 
@@ -1652,15 +1639,10 @@ const HelloTriangleApplication = struct {
 
         vk.vkCmdPipelineBarrier(
             commandBuffer,
-            sourceStage,
-            destinationStage,
-            0,
-            0,
-            null,
-            0,
-            null,
-            1, 
-            &barrier,
+            sourceStage, destinationStage, 0,
+            0, null,
+            0, null,
+            1, &barrier,
         );
 
         try self.endSingleTimeCommands(self.graphicsCommandPool, self.graphicsQueue, commandBuffer);
@@ -1793,7 +1775,7 @@ const HelloTriangleApplication = struct {
         surface:   vk.VkSurfaceKHR,
         allocator: *const std.mem.Allocator,
     ) !*SwapChainSupportDetails {
-        var details: *SwapChainSupportDetails = try SwapChainSupportDetails.init(allocator);
+        var details = try SwapChainSupportDetails.init(allocator);
 
         _ = vk.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, surface, &details.capabilities);
 
@@ -1821,29 +1803,35 @@ const HelloTriangleApplication = struct {
         surface:   vk.VkSurfaceKHR,
         allocator: *const std.mem.Allocator,
     ) !bool {
-        const familyIndices: QueueFamilyIndices = try findQueueFamilies(device, surface, allocator);
+        const familyIndices = try findQueueFamilies(device, surface, allocator);
+        if (!familyIndices.isComplete()) {
+            return false;
+        }
 
-        const extensionsSupported: bool = try checkDeviceExtensionSupport(device, allocator);
+        const extensionsSupported = try checkDeviceExtensionSupport(device, allocator);
         if (!extensionsSupported) {
             return false;
         }
 
-        var swapChainSupport: *SwapChainSupportDetails = try querySwapChainSupport(device, surface, allocator);
+        var swapChainSupport = try querySwapChainSupport(device, surface, allocator);
         defer swapChainSupport.deinit();
-        const swapChainAdequate: bool = swapChainSupport.formats.items.len > 0 and swapChainSupport.presentModes.items.len > 0;
+        const swapChainAdequate = swapChainSupport.formats.items.len > 0 and swapChainSupport.presentModes.items.len > 0;
+        if (!swapChainAdequate) {
+            return false;
+        }
 
         var supportedFeatures: vk.VkPhysicalDeviceFeatures = undefined;
         vk.vkGetPhysicalDeviceFeatures(device, &supportedFeatures);
+        if (supportedFeatures.samplerAnisotropy != vk.VK_TRUE) {
+            return false;
+        }
 
-        return familyIndices.isComplete()
-            and swapChainAdequate
-            and supportedFeatures.samplerAnisotropy == vk.VK_TRUE;
+        return true;
     }
 
     fn checkDeviceExtensionSupport(device: vk.VkPhysicalDevice, allocator: *const std.mem.Allocator) !bool {
         var extensionCount: u32 = 0;
         _ = vk.vkEnumerateDeviceExtensionProperties(device, null, &extensionCount, null);
-
         const availableExtensions = try allocator.alloc(vk.VkExtensionProperties, extensionCount);
         defer allocator.free(availableExtensions);
         _ = vk.vkEnumerateDeviceExtensionProperties(device, null, &extensionCount, availableExtensions.ptr);
@@ -1863,15 +1851,11 @@ const HelloTriangleApplication = struct {
     }
 
     fn findQueueFamilies(device: vk.VkPhysicalDevice, surface: vk.VkSurfaceKHR, allocator: *const std.mem.Allocator) !QueueFamilyIndices {
-        var familyIndices: QueueFamilyIndices = .{
-            .graphicsFamily = null,
-            .presentFamily  = null,
-            .transferFamily = null,
-        };
+        var familyIndices: QueueFamilyIndices = .{};
 
         var queueFamilyCount: u32 = 0;
         vk.vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, null);
-        const queueFamilies       = try allocator.alloc(vk.VkQueueFamilyProperties, queueFamilyCount);
+        const queueFamilies = try allocator.alloc(vk.VkQueueFamilyProperties, queueFamilyCount);
         defer allocator.free(queueFamilies);
         vk.vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.ptr);
         for (queueFamilies, 0..) |queueFamily, i| {
@@ -1879,7 +1863,7 @@ const HelloTriangleApplication = struct {
             // compared to this loop implementation (even though it can happen in this implementation
             // that the same queue family gets selected for both). (2025-04-19)
             // IMPORTANT: There is no fallback for when the transfer queue family is not found for familyIndices.transferFamily
-            // because the tutorial task requires that transfer and graphics commands don't use the same queue family. (2025-06-04)
+            // because the tutorial task requires that transfer queue is selected from a queue family that doesn't contain the graphics queue. (2025-06-04)
 
             if ((queueFamily.queueFlags & vk.VK_QUEUE_GRAPHICS_BIT) != 0) {
                 familyIndices.graphicsFamily = @intCast(i);
@@ -1902,8 +1886,8 @@ const HelloTriangleApplication = struct {
     }
 
     fn getRequiredExtensions(allocator: *const std.mem.Allocator) !std.ArrayList([*c]const u8) {
-        var glfwExtensionCount: u32              = 0;
-        const glfwExtensions:   [*c][*c]const u8 = glfw.glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
+        var glfwExtensionCount: u32 = 0;
+        const glfwExtensions = glfw.glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
 
         var extensions = std.ArrayList([*c]const u8).init(allocator.*);
         for (0..glfwExtensionCount) |i| {

@@ -1,0 +1,360 @@
+// High level mental map
+
+...
+
+MAX_FRAMES_IN_FLIGHT: u32 = 2
+
+enableValidationLayers = if debug then true else false
+
+...
+
+struct UniformBufferObject
+    deltaTime: f32 = 1.0
+
+struct ComputeShaderApplication
+    window:  GLFWwindow
+    surface: VkSurfaceKHR
+
+    physicalDevice: VkPhysicalDevice
+    device:         VkDevice
+
+    graphicsQueue: VkQueue
+    computeQueue:  VKQueue
+    transferQueue: VkQueue
+    presentQueue:  VkQueue
+
+    swapChain:             VkSwapchainKHR
+    swapChainImages:       []VkImage
+    swapChainImageFormat:  VkFormat
+    swapChainExtent:       VkExtent2D
+    swapChainImageViews:   []VkImageView
+    swapChainFramebuffers: []VkFramebuffer
+
+    renderPass:       VkRenderPass
+    pipelineLayout:   VkPipelineLayout
+    graphicsPipeline: VkPipeline
+
+    computeDescriptorSetLayout: VkDescriptorSetLayout
+    computePipelineLayout:      VkPipelineLayout
+    computePipeline:            VkPipeline
+
+    graphicsAndComputeCommandPool: VkCommandPool
+    transferCommandPool            VkCommandPool
+
+    descriptorPool:        VkDescriptorPool
+    computeDescriptorSets: [MAX_FRAMES_IN_FLIGHT]VkDescriptorSet
+
+    commandBuffers:       [MAX_FRAMES_IN_FLIGHT]VkCommandBuffer
+    computeCommandBuffers [MAX_FRAMES_IN_FLIGHT]VkCommandBuffer
+
+    imageAvailableSemaphores:  [MAX_FRAMES_IN_FLIGHT]VkSemaphore
+    renderFinishedSemaphores:  [MAX_FRAMES_IN_FLIGHT]VkSemaphore
+    computeFinishedSemaphores: [MAX_FRAMES_IN_FLIGHT]VkSemaphore
+    inFlightFences:            [MAX_FRAMES_IN_FLIGHT]VkFence
+    computeInFlightFences      [MAX_FRAMES_IN_FLIGHT]VkFence
+    currentFrame: u32 = 0
+
+    shaderStorageBuffers:       [MAX_FRAMES_IN_FLIGHT]VkBuffer
+    shaderStorageBuffersMemory: [MAX_FRAMES_IN_FLIGHT]VkDeviceMemory
+
+    uniformBuffers:       [MAX_FRAMES_IN_FLIGHT]VkBuffer
+    uniformBuffersMemory: [MAX_FRAMES_IN_FLIGHT]VkBuffer
+    uniformBuffersMapped: [MAX_FRAMES_IN_FLIGHT]VkBuffer
+
+    graphicsAndComputeQueueIndex: u32
+    presentQueueIndex:            u32
+
+    instance:       VkInstance
+    debugMessenger: VkDebugUtilsMessengerEXT
+
+    lastFrameTime: f32 = 0.0
+
+    framebufferResized: bool = false
+
+    lastTime: f64 = 0.0
+
+    allocator: *const std.mem.Allocator
+
+    run
+        initWindow
+        initVulkan
+        mainLoop
+        cleanup
+
+    initWindow
+        glfwInit
+        glfwWindowHint
+        gflwCreateWindow
+        glfwSetWindowUserPointer self
+        glfwSetFramebufferSizeCallback framebufferResizeCallback
+        glfwGetTime
+
+    framebufferResizeCallback
+        app = glfwGetWindowUserPointer
+        app.framebufferResized = true
+
+    initVulkan
+        createInstance
+            checkValidationLayerSupport
+                vkEnumerateInstanceLayerProperties
+            getRequiredExtensions
+                glfwGetRequiredInstanceExtensions
+            vkCreateInstance
+
+        setupDebugMessenger
+            if enableValidationLayers
+                createDebugUtilMessengerEXT
+                    vkGetInstanceProcAddr "vkCreateDebugUtilsMessengerEXT"
+
+        createSurface
+            glfwCreateWindowSurface
+
+        pickPhysicalDevice
+            vkEnumeratePhysicalDevices
+            for device in devices
+                if isDeviceSuitable
+                    physicalDevice = device
+
+        createLogicalDevice
+            findQueueFamilies
+            vkCreateDevice
+            vkGetDeviceQueue graphicsQueue
+            vkGetDeviceQueue computeQueue
+            vkGetDeviceQueue presentQueue
+            vkGetDeviceQueue transferQueue
+
+        createSwapChain
+            querySwapChainSupport
+            chooseSwapExtent
+                glfwGetFramebufferSize
+            findQueueFamilies
+            vkCreateSwapchainKHR
+            vkGetSwapchainImagesKHR
+
+        createImageViews
+            for i = 0; i < swapChainImages.len
+                vkCreateImageView
+
+        createRenderPass
+            vkCreateRenderPass
+
+        createComputeDescriptorSetLayout
+            vkCreateDescriptorSetLayout
+
+        createGraphicsPipeline
+            createShaderModule // vertex
+            createShaderModule // fragment
+            vkCreatePipelineLayout
+            vkCreateGraphicsPipelines
+            vkDestroyShaderModule
+            vkDestroyShaderModule
+
+        createComputePipeline
+            createShaderModule // compute
+            vkCreatePipelineLayout
+            vkCreateComputePipelines
+            vkDestroyShaderModule
+
+        createFramebuffers
+            for i = 0; i < swapChainImageViews.len
+                vkCreateFramebuffer
+
+        createCommandPool
+            findQueueFamilies
+            vkCreateCommandPool graphicsAndComputeCommandPool
+            vkCreateCommandPool transferCommandPool
+
+        createShaderStorageBuffers
+            createBuffer stagingBuffer stagingBufferMemory
+            vkMapMemory stagingBufferMemory
+            vkUnmapMemory stagingBufferMemory
+            for i = 0; i < shaderStorageBuffers.len
+                createBuffer shaderStorageBuffers[i] shaderStorageBuffersMemory[i]
+                copyBuffer src=stagingBuffer dst=shaderStorageBuffers[i]
+            vkDestroyBuffer stagingBuffer
+            vkFreeMemory stagingBufferMemory
+
+        createUniformBuffers
+            for i = 0; i < uniformBuffers.len
+                createBuffer
+                vkMapMemory
+
+        createDescriptorPool
+            vkCreateDescriptorPool
+
+        createComputeDescriptorSets
+            vkAllocateDescriptorSets
+            for i = 0; i < computeDescriptorSets.len
+                vkUpdateDescriptorSets
+
+        createCommandBuffers
+            vkAllocateCommandBuffers
+
+        createComputeCommandBuffers
+            vkAllocateCommandBuffers
+
+        createSyncObjects
+            for i = 0; i < MAX_FRAMES_IN_FLIGHT
+                vkCreateSemaphore imageAvailableSemaphores[i]
+                vkCreateSemaphore renderFinishedSemaphores[i]
+                vkCreateFence inFlightFences[i]
+
+                vkCreateSemaphore computeFinishedSemaphores[i]
+                vkCreateFence computeInFlightFences[i]
+
+    mainLoop
+        while glfwWindowShouldClose == 0
+            glfwPollEvents
+            drawFrame
+            glfwGetTime
+        vkDeviceWaitIdle
+
+    cleanup
+        cleanupSwapChain
+
+        vkDestroyPipeline computePipeline
+        vkDestroyPipelineLayout computePipelineLayout
+
+        vkDestroyPipeline graphicsPipeline
+        vkDestroyPipelineLayout pipelineLayout
+
+        vkDestroyRenderPass renderPass
+
+        for i = 0; i < uniformBuffers.len
+            vkDestroyBuffer uniformBuffers[i]
+            vkFreeMemory uniformBuffersMemory[i]
+
+        vkDestroyDescriptorPool descriptorPool
+
+        vkDestroyDescriptorSetLayout computeDescriptorSetLayout
+
+        for i = 0; i < shaderStorageBuffers.len
+            vkDestroyBuffer shaderStorageBuffers[i]
+            vkFreeMemory shaderStorageBuffersmemory[i]
+
+        for i = 0; i < MAX_FRAMES_IN_FLIGHT
+            vkDestroySemaphore renderFinishedSemaphores[i]
+            vkDestroySemaphore imageAvailableSemaphores[i]
+            vkDestroySemaphore computeFinishedSemaphores[i]
+            vkDestroyFence inFlightFences[i]
+            vkDestroyFence computeInFlightFences[i]
+
+        vkDestroyCommandPool graphicsAndComputeCommandPool
+        vkDestroyCommandPool transferCommandPool
+
+        vkDestroyDevice device
+
+        if enableValidationLayers
+            DestroyDebugUtilsMessengerEXT
+                vkGetInstanceProcAddr "vkDestroyDebugUtilsMessengerEXT"
+
+        vkDestroySurfaceKHR surface
+        vkDestroyInstance instance
+
+        glfwDestroyWindow window
+
+        glfwTerminate
+
+    drawFrame
+        vkWaitForFences computeInFlightFences[currentFrame]
+        vkResetFences computeInFlightFences[currentFrame]
+        vkResetCommandBuffer computeCommandBuffers[currentFrame]
+        recordComputeCommandBuffer computeCommandBuffers[currentFrame]
+            vkBeginCommandBuffer
+            vkCmdBindPipeline
+            vkCmdBindDescriptorSets
+            vkCmdDispatch
+            vkEndCommandBuffer
+        vkQueueSubmit computeQueue computeInFlightFences[currentFrame]
+
+        vkWaitForFences inFlightFences[currentFrame]
+        res = vkAcquireNextImageKHR
+        if res == VK_ERROR_OUT_OF_DATE_KHR
+            recreateSwapChain
+            return
+        else if res != VK_SUCCESS and res != VK_SUBOPTIMAL_KHR
+            return error.FailedToAcquireSwapChainImage
+        vkResetFences inFlightFences[currentFrame]
+        vkResetCommandBuffer commandBuffers[currentFrame]
+        recordCommandBuffer commandBuffers[currentFrame]
+            vkBeginCommandBuffer
+            vkCmdBeginRenderPass
+            vkCmdBindPipeline
+            vkCmdSetViewport
+            vkCmdSetScissor
+            vkCmdBindVertexBuffers
+            vkCmdDraw
+            vkCmdEndRenderPass
+            vkEndCommandBuffer
+        vkQueueSubmit graphicsQueue inFlightFences[currentFrame]
+
+        res = vkQueuePresentKHR
+        if res == VK_ERROR_OUT_OF_DATE_KHR or res == VK_SUBOPTIMAL_KHR or frameBufferResized
+            frameBufferResized = false
+            recreateSwapChain
+        else if res != VK_SUCCESS
+            return error.FailedToAcquireSwapChainImage
+
+        currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT
+
+
+
+    cleanupSwapChain
+        for framebuffer in swapCHainFramebuffers
+            vkDestroyFramebuffer framebuffer
+
+        for imageView in swapChainImageViews
+            vkDestroyImageView imageView
+
+        vkDestroySwapChainKHR swapChain
+
+    isDeviceSuitable
+        findQueueFamilies
+        checkDeviceExtensionSupport
+            vkEnumerateDeviceExtensionProperties
+        querySwapChainSupport
+
+    findQueueFamilies
+        vkGetPhysicalDeviceQueueFamilyProperties
+        vkGetPhysicalDeviceSurfaceSupportKHR
+
+    querySwapChainSupport
+        vkGetPhysicalDeviceSurfaceCapabilitiesKHR
+        vkGetPhysicalDeviceSurfaceFormatsKHR
+        vkGetPhysicalDeviceSurfacePresentModesKHR
+
+    createShaderModule
+        vkCreateShaderModule
+
+    createBuffer
+        findQueueFamilies
+        vkCreateBuffer
+        vkGetBufferMemoryRequirements
+        findMemoryType
+            vkGetPhysicalDeviceMemoryProperties
+        vkAllocateMemory
+        vkBindBufferMemory
+
+    copyBuffer // submiting to transfer queue
+        vkAllocateCommandBuffers
+        vkBeginCommandBuffer
+        vkCmdCopyBuffer
+        vkEndCommandBuffer
+        vkQueueSubmit
+        vkQueueWaitIdle
+        vkFreeCommandBuffers
+
+    recreateSwapChain
+        glfwGetFramebufferSize width height
+        while width == 0 or height == 0
+            glfwGetFramebufferSize width height
+            glfwWaitEvents
+
+        vkDeviceWaitIdle
+
+        cleanupSwapChain
+
+        createSwapChain
+        createImageViews
+        createFramebuffers
+

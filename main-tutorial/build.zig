@@ -24,9 +24,10 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("xrandr");
     exe.linkSystemLibrary("xi");
 
-    //NOTE: Will have to use local (non system) libraries because I will have to
-    //comment out SIMD related functions with corresponding preprocessor directives
-    //that cause linkage errors (Zig bug due to it being unfinished?), and use plain c ones. (2025-06-21)
+    // NOTE: I will have to use a local (non system) cglm library because I will have to comment out a SIMD-related function part
+    // that causes linkage errors because it calls a C function that is defined as "static inline __attribute((always_inline))'
+    // inside a C header file (such functions don't have a symbol that Zig can link to?);
+    // instead, I will use the plain C implementation. (2025-06-21)
     const cglmLib = b.addLibrary(.{
         .name        = "cglm",
         .root_module = b.createModule(.{
@@ -34,12 +35,12 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    cglmLib.installHeadersDirectory(b.path("libs/cglm/include/"), ".", .{});
+    cglmLib.installHeadersDirectory(b.path("../libs/cglm/include/"), ".", .{});
     cglmLib.addCSourceFiles(.{
         .files = &.{
-            "libs/cglm/src/vec2.c",
-            "libs/cglm/src/vec3.c",
-            "libs/cglm/src/mat4.c",
+            "../libs/cglm/src/vec2.c",
+            "../libs/cglm/src/vec3.c",
+            "../libs/cglm/src/mat4.c",
         },
     });
     cglmLib.linkLibC();
@@ -52,8 +53,8 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    stbLib.installHeadersDirectory(b.path("libs/stb/"), ".", .{});
-    stbLib.addIncludePath(b.path("libs/stb/"));
+    stbLib.installHeadersDirectory(b.path("../libs/stb/"), ".", .{});
+    stbLib.addIncludePath(b.path("../libs/stb/"));
     stbLib.addCSourceFile(.{
         .file = b.addWriteFiles().add(
             "stb_image_stub.c",
@@ -71,8 +72,8 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    tinyObjLoaderLib.installHeadersDirectory(b.path("libs/tinyobjloader-c/"), ".", .{});
-    tinyObjLoaderLib.addIncludePath(b.path("libs/tinyobjloader-c/"));
+    tinyObjLoaderLib.installHeadersDirectory(b.path("../libs/tinyobjloader-c/"), ".", .{});
+    tinyObjLoaderLib.addIncludePath(b.path("../libs/tinyobjloader-c/"));
     tinyObjLoaderLib.addCSourceFile(.{
         .file = b.addWriteFiles().add(
             "tiny_obj_loader_c.c",
@@ -82,4 +83,14 @@ pub fn build(b: *std.Build) void {
     });
     tinyObjLoaderLib.linkLibC();
     exe.linkLibrary(tinyObjLoaderLib);
+
+    const vert = b.addSystemCommand(&.{"glslc", "shaders/shader.vert", "-o", "shaders/vert.spv"});
+    const frag = b.addSystemCommand(&.{"glslc", "shaders/shader.frag", "-o", "shaders/frag.spv"});
+    const shadersStep = b.step("shaders", "Compile GLSL shaders to SPIR-V");
+    shadersStep.dependOn(&vert.step);
+    shadersStep.dependOn(&frag.step);
+
+    const withShadersStep = b.step("with-shaders", "Compile both GLSL shaders to SPIR-V, and the program");
+    withShadersStep.dependOn(shadersStep);
+    withShadersStep.dependOn(&exe.step);
 }
